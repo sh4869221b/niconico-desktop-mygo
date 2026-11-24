@@ -23,6 +23,7 @@ type browser struct {
 	web                          *mygo.WebView
 	field, source, title, status string
 	libraryPath, storeWarning    string
+	commentLanguageWarning       bool
 	data                         library
 	history, loaded, closed      bool
 	noHistory                    string
@@ -58,8 +59,15 @@ func (b *browser) start(initial string) {
 	})
 	done := make(chan struct{})
 	b.win.OnClosed(func() { b.closed = true; close(done) })
+	// Set only the first-party language preference before any official page
+	// can request comments. Reuse the existing profile and its sign-in data.
+	session := mygo.NewSession("niconico-desktop-mygo")
+	b.commentLanguageWarning = setJapaneseComments(session.Cookies.Set, time.Now()) != nil
+	if b.closed {
+		return
+	}
 	view, err := b.win.NewWebView(mygo.WebViewOptions{
-		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: mygo.NewSession("niconico-desktop-mygo")},
+		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: session},
 	})
 	if err != nil {
 		b.status = "WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。"
@@ -272,6 +280,9 @@ func (b *browser) draw(c *ui.Context) {
 		})
 		ui.Row(c).FillWidth().Padding(5, 12).Gap(12).Children(func() {
 			ui.Text(c, b.status).TextColor(t.TextMuted)
+			if b.commentLanguageWarning {
+				ui.Text(c, "日本語コメントの設定に失敗しました。アプリを再起動してください。").TextColor(t.TextMuted)
+			}
 			if b.storeWarning != "" {
 				ui.Text(c, b.storeWarning).TextColor(t.TextMuted)
 			}
