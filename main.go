@@ -15,6 +15,9 @@ import (
 
 const appName = "Niconico Desktop MyGo"
 
+// Set by the release workflow. It does not change the WebView2 profile name.
+var version = "dev"
+
 type browser struct {
 	win                          *mygo.Window
 	web                          *mygo.WebView
@@ -50,7 +53,7 @@ func (b *browser) start(initial string) {
 		b.storeWarning = "保存先を取得できません。"
 	}
 	b.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName, Width: 1260, Height: 850, MinWidth: 1000, MinHeight: 600,
+		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 1000, MinHeight: 600,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
 	done := make(chan struct{})

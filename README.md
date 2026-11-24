@@ -21,4 +21,6 @@ go test ./...
 go build -trimpath -ldflags=-H=windowsgui -o NiconicoDesktopMyGo.exe .
 ```
 
-GitHub Actionsの「Windows build」はテスト、静的チェック、Windows x64のビルドを実行し、試用ZIPとSHA-256を成果物として保存します。C#版のScoop登録やリリースは変更しません。
+GitHub Actionsの「Windows build」はテスト、静的チェック、Windows x64のビルドを実行し、試用ZIPとSHA-256を成果物として保存します。タグを push するか、`main`で「Windows build」を開いて`vMAJOR.MINOR.PATCH`を指定すると、上記のチェックに合格したファイルだけをGitHub Releasesへ公開します。
+
+公開版はScoopの`mybucket/niconico-desktop-mygo`で導入できます。C#版とは別パッケージです。
