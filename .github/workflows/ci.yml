@@ -1,0 +1,37 @@
+name: Windows build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+      GOARCH: amd64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Test
+        run: go test -mod=readonly ./...
+      - name: Vet
+        run: go vet -mod=readonly ./...
+      - name: Build and package
+        shell: pwsh
+        run: |
+          go build -mod=readonly -trimpath -ldflags=-H=windowsgui -o NiconicoDesktopMyGo.exe .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Compress-Archive -Path NiconicoDesktopMyGo.exe,README.md,third_party -DestinationPath NiconicoDesktopMyGo-win-x64.zip
+          $hash = (Get-FileHash NiconicoDesktopMyGo-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  NiconicoDesktopMyGo-win-x64.zip" | Set-Content SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v7
+        with:
+          name: NiconicoDesktopMyGo-win-x64
+          path: |
+            NiconicoDesktopMyGo-win-x64.zip
+            SHA256SUMS.txt
