@@ -1,0 +1,593 @@
+diff --git a/internal/gpu/d3d11/d3d11.go b/internal/gpu/d3d11/d3d11.go
+--- a/internal/gpu/d3d11/d3d11.go
++++ b/internal/gpu/d3d11/d3d11.go
+@@ -13,6 +13,7 @@
+ //go:generate go run gen.go
+ 
+ import (
++	"log"
+ 	"errors"
+ 	"fmt"
+ 	"image"
+@@ -281,6 +282,10 @@
+ 
+ // Renderer draws scenes into a window.
+ type Renderer struct {
++ retained retainedState
++ retainedReal realRetainedState
++	probeVideo probeVideoLayer
++	probeRoot uintptr
+ 	hwnd uintptr
+ 	// dev is the device the renderers share (shared.go), whose objects
+ 	// device, ctx, ctx1, factory, the shaders, the input layout, the states
+@@ -753,7 +758,13 @@
+ 	if hr := call(r.visual, dcompVisualSetContent, r.swapChain); failed(hr) {
+ 		return fmt.Errorf("d3d11: cannot show the swap chain in the visual: %#x", uint32(hr))
+ 	}
+-	if hr := call(r.target, dcompTargetSetRoot, r.visual); failed(hr) {
++	root := r.visual
++ if probeComposeVideo {
++  if hr:=call(r.dcomp,dcompCreateVisual,uintptr(unsafe.Pointer(&r.probeRoot)));failed(hr){return fmt.Errorf("probe root: %x",uint32(hr))}
++  root=r.probeRoot
++  if hr:=call(root,16,r.visual,1,0);failed(hr){return fmt.Errorf("probe add chrome: %x",uint32(hr))}
++ }
++ if hr := call(r.target, dcompTargetSetRoot, root); failed(hr) {
+ 		return fmt.Errorf("d3d11: cannot show the visual on the window: %#x", uint32(hr))
+ 	}
+ 	if hr := call(r.dcomp, dcompCommit); failed(hr) {
+@@ -822,6 +833,8 @@
+ 	r.lat.release()
+ 	r.cost.release()
+ 	r.b.Release()
++	r.probeVideo.release(r)
++	free(&r.probeRoot)
+ 	if settling[r.hwnd] {
+ 		delete(settling, r.hwnd)
+ 		procKillTimer.Call(r.hwnd, settleTimer)
+@@ -862,7 +875,9 @@
+ 	}
+ 	// The target goes first: a window has one at most, which another
+ 	// renderer of it then makes.
+-	for _, p := range []*uintptr{&r.visual, &r.target, &r.dcomp, &r.rtv, &r.swapChain2, &r.swapChain, &r.instBuf, &r.cbuf, &r.passCB} {
++	r.retainedReal.release(r)
++ r.retained.release(r)
++ for _, p := range []*uintptr{&r.visual, &r.target, &r.dcomp, &r.rtv, &r.swapChain2, &r.swapChain, &r.instBuf, &r.cbuf, &r.passCB} {
+ 		free(p)
+ 	}
+ 	r.dropDevice()
+@@ -1074,6 +1089,8 @@
+ // drawFrame draws s into the swap chain's back buffer, only where it
+ // changed since the last frame when the swap chain shows that one, and
+ // reports whether it drew: a frame that changed nothing draws nothing.
++var profileWhole = os.Getenv("MYGO_PROBE_WHOLE") == "1"
++
+ func (r *Renderer) drawFrame(s *scene.Scene) (bool, error) {
+ 	defer r.releaseShared()
+ 	r.frame++
+@@ -1086,7 +1103,13 @@
+ 		// (clearWhole).
+ 		r.held = false
+ 	}
+-	var damage []image.Rectangle
++	src, err := r.probeSeparate(s)
++ if err != nil { return false, err }
++ if err := r.retainedReal.frame(r, &src); err != nil { return false, err }
++ src, err = r.retained.frame(r, &src)
++ if err != nil { return false, err }
++ s = &src
++ var damage []image.Rectangle
+ 	known := false
+ 	if r.ctx1 != 0 {
+ 		damage, known = r.diff.Diff(s)
+@@ -1124,7 +1147,7 @@
+ 				r.pipelines.Remember()
+ 				return false, nil
+ 			}
+-			part, r.redrew = &r.part, redrewPart
++			if !profileWhole { part, r.redrew = &r.part, redrewPart }
+ 		}
+ 	}
+ 	r.held = false
+@@ -1266,6 +1289,7 @@
+ 	}
+ 	if rtv == r.rtv {
+ 		if q := r.cost.begin(ctx); q != nil {
++			q.frame, q.width, q.height = r.frame, r.w, r.h
+ 			defer r.cost.end(ctx, q)
+ 		}
+ 	}
+@@ -1885,6 +1909,10 @@
+ 	// window made hidden, may not be what the window shows once it does:
+ 	// the next frame draws whole.
+ 	r.held = r.ctx1 != 0 && uint32(hr) != dxgiStatusOccluded
++    // Diagnostic only. Reports submission, not actual scanout.
++    pixels := r.w*r.h; if r.redrew == redrewPart { pixels = 0; for _, s := range r.part.Rects { pixels += int(s.Right-s.Left)*int(s.Bottom-s.Top) } }
++	log.Printf("mygo-probe submit %p %dx%d %d sync=%d dirty=%d unix_us=%d hr=%x pixels=%d", &r.cost, r.w, r.h, r.frame, sync, r.redrew, time.Now().UnixMicro(), uint32(hr), pixels)
++
+ 	if r.gaveUp && !r.resizing && r.refused == 0 {
+ 		// DXGI took a frame at once, the swap chain settled: frames
+ 		// present uncapped again (uncapped.go).
+diff --git a/internal/gpu/d3d11/latency.go b/internal/gpu/d3d11/latency.go
+--- a/internal/gpu/d3d11/latency.go
++++ b/internal/gpu/d3d11/latency.go
+@@ -3,6 +3,7 @@
+ package d3d11
+ 
+ import (
++	"log"
+ 	"sync"
+ 	"syscall"
+ 	"time"
+@@ -48,6 +49,8 @@
+ type frameQuery struct {
+ 	disjoint, t0, t1 uintptr
+ 	busy             bool
++	frame uint64
++	width, height int
+ 	// main is the main thread's part of the frame, or -1 when no Ready started
+ 	// it, as a resize's frame drawn at once: its cost is not known.
+ 	main time.Duration
+@@ -168,7 +171,9 @@
+ 		}
+ 		q.busy = false
+ 		if q.main >= 0 && clock.Disjoint == 0 && clock.Frequency != 0 && t1 >= t0 {
+-			c.add(q.main + time.Duration(float64(t1-t0)/float64(clock.Frequency)*float64(time.Second)))
++			draw := time.Duration(float64(t1-t0)/float64(clock.Frequency)*float64(time.Second))
++            log.Printf("mygo-probe draw %p %dx%d %d gpu_us=%.1f build_elapsed_us=%.1f", c, q.width, q.height, q.frame, float64(draw.Nanoseconds())/1000, float64(q.main.Nanoseconds())/1000)
++            c.add(q.main + draw)
+ 		}
+ 	}
+ }
+diff --git a/internal/gpu/d3d11/probe_retained.go b/internal/gpu/d3d11/probe_retained.go
+new file mode 100644
+--- /dev/null
++++ b/internal/gpu/d3d11/probe_retained.go
+@@ -0,0 +1,150 @@
++//go:build windows
++package d3d11
++
++import (
++ "fmt"
++ "image"
++ "image/draw"
++ "image/png"
++ "log"
++ "math"
++ "os"
++ "strconv"
++ "time"
++ "unsafe"
++
++ "github.com/egoist/mygo/internal/scene"
++)
++
++var retainedProbe = os.Getenv("MYGO_PROBE_RETAIN")
++var retainedCount,_ = strconv.Atoi(os.Getenv("MYGO_PROBE_RETAIN_COUNT"))
++var retainedDXGISurface=guid{0xcafcb56c,0x6ac3,0x4889,[8]byte{0xbf,0x47,0x9e,0x23,0xbb,0xd2,0x60,0xec}}
++type retainedState struct {
++ start time.Time
++ bounds scene.Rect
++ group uintptr
++ labels []*scene.Image
++ surfaces []uintptr
++ ops []scene.Op
++}
++func rflt(v float32) uintptr {return uintptr(math.Float32bits(v))}
++func rdbl(v float64) uintptr {return uintptr(math.Float64bits(v))}
++func rcheck(hr uintptr, what string) error {
++ if failed(hr) {return fmt.Errorf("retained %s: %#x",what,uint32(hr))}
++ return nil
++}
++
++func (p *retainedState) createSurface(r *Renderer, pix *image.RGBA) (out uintptr, err error) {
++ w,h:=pix.Rect.Dx(),pix.Rect.Dy()
++ if err=rcheck(call(r.dcomp,8,uintptr(w),uintptr(h),87,1,uintptr(unsafe.Pointer(&out))),"surface");err!=nil{return}
++ surface:=out
++ defer func(){if err!=nil{free(&surface)}}()
++ var dxgi,tex uintptr
++ var point [2]int32
++ if err=rcheck(call(surface,3,0,uintptr(unsafe.Pointer(&retainedDXGISurface)),uintptr(unsafe.Pointer(&dxgi)),uintptr(unsafe.Pointer(&point))),"begin");err!=nil{return}
++ defer free(&dxgi)
++ if err=rcheck(call(dxgi,0,uintptr(unsafe.Pointer(&iidID3D11Texture2D)),uintptr(unsafe.Pointer(&tex))),"tex");err!=nil{call(surface,4);return}
++ defer free(&tex)
++ pixels:=append([]byte(nil),pix.Pix...)
++ for i:=0;i<len(pixels);i+=4{pixels[i],pixels[i+2]=pixels[i+2],pixels[i]}
++ box:=[6]uint32{uint32(point[0]),uint32(point[1]),0,uint32(point[0]+int32(w)),uint32(point[1]+int32(h)),1}
++ call(r.ctx,ctxUpdateSubresource,tex,0,uintptr(unsafe.Pointer(&box)),uintptr(unsafe.Pointer(&pixels[0])),uintptr(pix.Stride),0)
++ err=rcheck(call(surface,4),"end")
++ return
++}
++
++func (p *retainedState) release(r *Renderer){
++ if p.group!=0{
++  if r.visual!=0 && r.dcomp!=0 {call(r.visual,17,p.group);call(r.dcomp,3)}
++  free(&p.group)
++ }
++ for i:=range p.surfaces{free(&p.surfaces[i])}
++ *p=retainedState{}
++}
++func (p *retainedState) geometry(i int)(x,y,v float32, first float64){
++ label:=p.labels[i%len(p.labels)]
++ b:=p.bounds
++ y=b.Y+float32(i%16)*max(1,(b.H-float32(label.H))/15)
++ if i%6==0{
++  x=b.X+float32((i/6)%4)*max(1,(b.W-float32(label.W))/4)
++  return
++ }
++ v=-(b.W+float32(label.W))/4
++ first=float64((i*37)%100)/25
++ x=b.X+b.W+v*float32(first)
++ return
++}
++func (p *retainedState) initialize(r *Renderer,b scene.Rect) error {
++ p.bounds=b
++ if !r.composed{return fmt.Errorf("retained requires DComp")}
++ if retainedProbe=="B"{
++  if err:=rcheck(call(r.dcomp,7,uintptr(unsafe.Pointer(&p.group))),"group");err!=nil{return err}
++  clip:=[4]float32{b.X,b.Y,b.X+b.W,b.Y+b.H}
++  if err:=rcheck(call(p.group,14,uintptr(unsafe.Pointer(&clip))),"clip");err!=nil{return err}
++  if err:=rcheck(call(r.visual,16,p.group,1,0),"add group");err!=nil{return err}
++ }
++ for i:=0;i<16;i++{
++  file,err:=os.Open(fmt.Sprintf("retained-label-%02d.png",i));if err!=nil{return err}
++  img,err:=png.Decode(file);file.Close();if err!=nil{return err}
++  rgba:=image.NewRGBA(img.Bounds());draw.Draw(rgba,rgba.Bounds(),img,img.Bounds().Min,draw.Src)
++  p.labels=append(p.labels,scene.NewImage(rgba))
++  if retainedProbe=="B"{
++   u,e:=p.createSurface(r,rgba);if e!=nil{return e};p.surfaces=append(p.surfaces,u)
++  }
++ }
++ if retainedProbe=="B" {
++  for i:=0;i<retainedCount;i++{
++   if err:=p.child(r,i);err!=nil{return err}
++  }
++  if err:=rcheck(call(r.dcomp,3),"commit");err!=nil{return err}
++ }
++ p.start=time.Now()
++ log.Printf("retained-probe mode=%s count=%d bounds=%+v",retainedProbe,retainedCount,b)
++ return nil
++}
++func (p *retainedState) child(r *Renderer,i int) error {
++ var child,anim uintptr
++ if e:=rcheck(call(r.dcomp,7,uintptr(unsafe.Pointer(&child))),"child");e!=nil{return e}
++ defer free(&child)
++ x,y,v,first:=p.geometry(i)
++ if e:=rcheck(call(child,6,rflt(y)),"y");e!=nil{return e}
++ if v==0{
++  if e:=rcheck(call(child,4,rflt(x)),"x");e!=nil{return e}
++ }else{
++  if e:=rcheck(call(r.dcomp,25,uintptr(unsafe.Pointer(&anim))),"animation");e!=nil{return e}
++  defer free(&anim)
++  if e:=rcheck(call(anim,5,0,rflt(x),rflt(v),0,0),"cubic 1");e!=nil{return e}
++  if e:=rcheck(call(anim,5,rdbl(4-first),rflt(p.bounds.X+p.bounds.W),rflt(v),0,0),"cubic 2");e!=nil{return e}
++  if e:=rcheck(call(anim,7,rdbl(8-first),rdbl(4)),"repeat");e!=nil{return e}
++  if e:=rcheck(call(child,3,anim),"animate x");e!=nil{return e}
++ }
++ if e:=rcheck(call(child,15,p.surfaces[i%len(p.surfaces)]),"content");e!=nil{return e}
++ return rcheck(call(p.group,16,child,1,0),"add child")
++}
++func (p *retainedState) frame(r *Renderer,s *scene.Scene)(scene.Scene,error){
++ out:=*s
++ if retainedProbe==""||retainedCount<=0{return out,nil}
++ var b scene.Rect
++ for _,op:=range s.Ops{
++  if op.Kind==scene.OpImage&&op.Image!=nil&&op.Image.Surface!=nil&&!op.Transform.Set&&!op.Rect.Empty(){b=op.Rect;break}
++ }
++ if b.Empty(){if !p.start.IsZero(){p.release(r)};return out,nil}
++ if b!=p.bounds||p.start.IsZero(){
++  p.release(r)
++  if err:=p.initialize(r,b);err!=nil{p.release(r);return out,err}
++ }
++ if retainedProbe!="A"{return out,nil}
++ p.ops=append(p.ops[:0],s.Ops...)
++ p.ops=append(p.ops,scene.Op{Kind:scene.OpPushClip,Rect:b})
++ sec:=time.Since(p.start).Seconds()
++ for i:=0;i<retainedCount;i++{
++  label:=p.labels[i%len(p.labels)]
++  x,y,v,first:=p.geometry(i)
++  if v!=0{x=b.X+b.W+v*float32(math.Mod(sec+first,4))}
++  p.ops=append(p.ops,scene.Op{Kind:scene.OpImage,Rect:scene.Rect{X:x,Y:y,W:float32(label.W),H:float32(label.H)}, Image:label})
++ }
++ p.ops=append(p.ops,scene.Op{Kind:scene.OpPopClip})
++ out.Ops=p.ops
++ return out,nil
++}
++
+diff --git a/internal/gpu/d3d11/probe_retained_real.go b/internal/gpu/d3d11/probe_retained_real.go
+new file mode 100644
+--- /dev/null
++++ b/internal/gpu/d3d11/probe_retained_real.go
+@@ -0,0 +1,118 @@
++//go:build windows
++package d3d11
++
++import (
++ "fmt"
++ "image"
++ "log"
++ "math"
++ "os"
++ "time"
++ "unsafe"
++ "github.com/egoist/mygo/internal/scene"
++)
++var retainedStats = os.Getenv("MYGO_PROBE_COMPOSITION_STATS") == "1"
++var realRetained = os.Getenv("MYGO_PROBE_RETAIN") == "D"
++type probeTexture struct { ptr uintptr; refs int }
++type realRetainedItem struct { visual uintptr; pixels *image.RGBA; revision int64 }
++type realRetainedState struct {
++ group uintptr
++ clip [4]float32
++ generation int64
++ origin time.Time
++ media float64
++ playing bool
++ items map[int64]realRetainedItem
++ textures map[*image.RGBA]*probeTexture
++ traceTag int
++ lastStats time.Time
++}
++func (p *realRetainedState) release(r *Renderer) {
++ if p.group!=0 {
++  call(r.visual,17,p.group)
++  call(r.dcomp,3)
++  free(&p.group)
++ }
++ for _,v:=range p.items {free(&v.visual)}
++ for _,t:=range p.textures{free(&t.ptr)}
++ *p=realRetainedState{}
++}
++func (p *realRetainedState) frame(r *Renderer,s *scene.Scene) error {
++ if !realRetained&&!retainedStats{return nil}
++ var picture scene.Rect
++ for _,op:=range s.Ops {
++  if op.Kind==scene.OpImage&&op.Image!=nil&&op.Image.Surface!=nil&&!op.Transform.Set&&!op.Rect.Empty(){picture=op.Rect;break}
++ }
++ if picture.Empty(){if p.group!=0{p.release(r)};return nil}
++ if retainedStats&&r.composed&&time.Since(p.lastStats)>=250*time.Millisecond {
++  p.lastStats=time.Now()
++  var f struct{ last int64; num,den uint32; now,freq,next int64 }
++  if hr:=call(r.dcomp,5,uintptr(unsafe.Pointer(&f)));!failed(hr)&&f.den!=0&&f.freq>0{
++   log.Printf("composition nominal %.3f current=%d last=%d next=%d freq=%d",float64(f.num)/float64(f.den),f.now,f.last,f.next,f.freq)
++  }
++ }
++ if !realRetained{return nil}
++ f:=scene.ExperimentalRetained
++ if !f.Enabled || f.Bounds.W<=0 || f.Bounds.H<=0 {if p.group!=0{p.release(r)};return nil}
++ if !r.composed{return fmt.Errorf("real retained requires DComp")}
++ scale:=s.Scale;if scale<=0{scale=1}
++ clip:=[4]float32{picture.X+(picture.W-f.Bounds.W*scale)/2,picture.Y,picture.X+(picture.W+f.Bounds.W*scale)/2,picture.Y+f.Bounds.H*scale}
++ if p.group!=0 && p.clip!=clip {p.release(r)}
++ changed:=false
++ if p.group==0 {
++  if e:=rcheck(call(r.dcomp,7,uintptr(unsafe.Pointer(&p.group))),"real group");e!=nil{return e}
++  if e:=rcheck(call(p.group,14,uintptr(unsafe.Pointer(&clip))),"real clip");e!=nil{return e}
++  if e:=rcheck(call(r.visual,16,p.group,1,0),"real add");e!=nil{return e}
++  p.clip=clip
++  p.items=make(map[int64]realRetainedItem)
++  p.textures=make(map[*image.RGBA]*probeTexture)
++  changed=true
++  log.Printf("real-retained start clip=%v scale=%g",clip,scale)
++ }
++ now:=time.Now(); seconds:=float64(f.Ms)/1000
++ predicted:=p.media
++ if p.playing {predicted+=now.Sub(p.origin).Seconds()}
++ rebase:=changed || p.playing!=f.Playing || math.Abs(seconds-predicted)>0.09
++ if rebase {p.media,p.origin,p.playing=seconds,now,f.Playing;p.generation++}
++ for id, v:=range p.items {
++  found:=false
++  for _,c:=range f.Items {if id==c.ID{found=true;break}}
++  if !found {call(p.group,17,v.visual);free(&v.visual);if tex:=p.textures[v.pixels];tex!=nil{tex.refs--;if tex.refs==0{free(&tex.ptr);delete(p.textures,v.pixels)}};delete(p.items,id);changed=true}
++ }
++ var previousVisual uintptr
++ for _,c:=range f.Items {
++  v,ok:=p.items[c.ID]
++  if !ok {
++   var e error
++   tex:=p.textures[c.Pixels]
++   if tex==nil{tex=&probeTexture{};tex.ptr,e=r.retained.createSurface(r,c.Pixels);if e!=nil{return e};p.textures[c.Pixels]=tex;if c.Pixels.Bounds().Dx()>2200 && os.Getenv("MYGO_PROBE_DIAG")=="1" {log.Printf("wide surface cue=%d width=%d height=%d",c.ID,c.Pixels.Bounds().Dx(),c.Pixels.Bounds().Dy())}}
++   if e=rcheck(call(r.dcomp,7,uintptr(unsafe.Pointer(&v.visual))),"real visual");e!=nil{return e}
++   v.pixels=c.Pixels;tex.refs++;p.items[c.ID]=v
++   if e=rcheck(call(v.visual,15,tex.ptr),"real content");e!=nil{return e}
++   if e=rcheck(call(v.visual,6,rflt(clip[1]+c.Y*scale)),"real y");e!=nil{return e}
++   if e=rcheck(call(p.group,16,v.visual,1,previousVisual),"real child");e!=nil{return e}
++   changed=true
++  }
++  previousVisual=v.visual
++  if !ok||v.revision!=p.generation {
++   if e:=rcheck(call(v.visual,6,rflt(clip[1]+c.Y*scale)),"real y rebase");e!=nil{return e}
++   x:=clip[0]+c.X*scale
++   if f.Playing&&c.Speed!=0&&c.End>f.Ms {
++    var a uintptr
++    if e:=rcheck(call(r.dcomp,25,uintptr(unsafe.Pointer(&a))),"real animation");e!=nil{return e}
++    remain:=float64(c.End-f.Ms)/1000
++    e:=rcheck(call(a,5,0,rflt(x),rflt(c.Speed*scale),0,0),"real cubic")
++    if e==nil {e=rcheck(call(a,8,rdbl(remain),rflt(x+c.Speed*scale*float32(remain))),"real end")}
++    if e==nil {e=rcheck(call(v.visual,3,a),"real offset anim")}
++    free(&a);if e!=nil{return e}
++   }else{
++    if e:=rcheck(call(v.visual,4,rflt(x)),"real x");e!=nil{return e}
++   }
++   v.revision=p.generation;p.items[c.ID]=v;changed=true
++  }
++ }
++ if changed{if err:=rcheck(call(r.dcomp,3),"real commit");err!=nil{return err}}
++ if os.Getenv("MYGO_BENCH_CONTROL")=="1" && int(f.Ms/250)!=p.traceTag { p.traceTag=int(f.Ms/250);ids:=[]int64{};for _,c:=range f.Items{if _,ok:=p.items[c.ID];ok{ids=append(ids,c.ID)}};log.Printf("cue submitted ms=%d ids=%v",f.Ms,ids) }
++ return nil
++}
++
+diff --git a/internal/gpu/d3d11/probe_split.go b/internal/gpu/d3d11/probe_split.go
+new file mode 100644
+--- /dev/null
++++ b/internal/gpu/d3d11/probe_split.go
+@@ -0,0 +1,115 @@
++//go:build windows
++
++package d3d11
++
++import (
++ "fmt"
++ "log"
++ "os"
++ "unsafe"
++
++ "github.com/egoist/mygo/internal/gpu"
++ "github.com/egoist/mygo/internal/scene"
++)
++
++var probeComposeVideo = os.Getenv("MYGO_PROBE_SPLIT") == "1"
++var probeNativeSize = os.Getenv("MYGO_PROBE_NATIVE_SIZE") == "1"
++var probeBoundVideo = os.Getenv("MYGO_PROBE_BOUND") == "1"
++
++// Local benchmark only: one untransformed video, one fixed-sized player window.
++// The decoded picture is submitted to a separate DirectComposition visual only
++// when its version changes. The app's original scene is kept intact for logic.
++type probeVideoLayer struct {
++ root, visual, chain uintptr
++ w, h int
++ dest scene.Rect
++ id, version uint64
++ last scene.Rect
++ ops []scene.Op
++ b gpu.Builder
++}
++
++func (v *probeVideoLayer) release(r *Renderer) {
++ if v.visual != 0 && r.probeRoot != 0 {
++  call(r.probeRoot, 17, v.visual)
++  call(r.dcomp, dcompCommit)
++ }
++ free(&v.visual)
++ free(&v.chain)
++ v.b.Release()
++ *v = probeVideoLayer{}
++}
++
++func (r *Renderer) probeSeparate(s *scene.Scene) (scene.Scene, error) {
++ v := &r.probeVideo
++ out := *s
++ if !(r.composed && (probeComposeVideo || probeBoundVideo)) { return out, nil }
++ at := -1
++ for i, op := range s.Ops {
++  if op.Kind == scene.OpImage && op.Image != nil && op.Image.Surface != nil && !op.Transform.Set && !op.Rect.Empty() {
++   at = i
++   break
++  }
++ }
++ if at < 0 {
++  if v.visual != 0 { v.release(r) }
++  return out, nil
++ }
++ op := s.Ops[at]
++ if probeComposeVideo {
++  if err := v.paint(r,s,op); err != nil { return out,err }
++ }
++ v.ops = append(v.ops[:0],s.Ops...)
++ if probeComposeVideo {
++  // Keep original opaque letterboxes/controls; make just the picture
++  // transparent, then let the original comments paint over that hole.
++  v.ops[at] = scene.Op{Kind:scene.OpHole, Rect:op.Rect}
++ } else {
++  // Diagnostic bound: keep all timing and comments, but omit video drawing.
++  v.ops[at] = scene.Op{Kind:scene.OpFill, Rect:op.Rect}
++ }
++ out.Ops = v.ops
++ return out,nil
++}
++
++func (v *probeVideoLayer) paint(r *Renderer,s *scene.Scene,op scene.Op) error {
++ w,h:=s.Width,s.Height
++ if probeNativeSize {w,h=op.Image.W,op.Image.H}
++ if v.chain != 0 && (v.w != w || v.h != h) {v.release(r)}
++ if v.chain == 0 {
++  check := func(h uintptr,what string)error{if failed(h){return fmt.Errorf("probe %s: %x",what,uint32(h))};return nil}
++  desc := swapChainDesc1{Width:uint32(w), Height:uint32(h),Format:formatB8G8R8A8Unorm,SampleCount:1, BufferUsage:0x20,BufferCount:2,Scaling:scalingStretch,SwapEffect:3, AlphaMode:1}
++  if err:=check(call(r.factory,factoryCreateSwapChainComp,r.device,uintptr(unsafe.Pointer(&desc)),0,uintptr(unsafe.Pointer(&v.chain))),"video swapchain");err!=nil{return err}
++  if err:=check(call(r.dcomp,dcompCreateVisual,uintptr(unsafe.Pointer(&v.visual))),"video visual");err!=nil{return err}
++  if err:=check(call(v.visual,dcompVisualSetContent,v.chain),"video content");err!=nil{return err}
++  if err:=check(call(r.probeRoot,16,v.visual,0,0),"add lower video");err!=nil{return err}
++  if err:=check(call(r.dcomp,dcompCommit),"commit");err!=nil{return err}
++  v.w,v.h=w,h
++ }
++ if probeNativeSize && v.dest!=op.Rect {
++  m:=[6]float32{op.Rect.W/float32(w),0,0,op.Rect.H/float32(h),op.Rect.X,op.Rect.Y}
++  if hr:=call(v.visual,8,uintptr(unsafe.Pointer(&m)));failed(hr){return fmt.Errorf("probe video transform: %x",uint32(hr))}
++  if hr:=call(r.dcomp,dcompCommit);failed(hr){return fmt.Errorf("probe video transform commit: %x",uint32(hr))}
++  v.dest=op.Rect
++ }
++ if op.Image.ID()==v.id && op.Image.Version()==v.version && op.Rect==v.last {return nil}
++ var buf,rtv uintptr
++ if hr:=call(v.chain,scGetBuffer,0,uintptr(unsafe.Pointer(&iidID3D11Texture2D)),uintptr(unsafe.Pointer(&buf)));failed(hr){return fmt.Errorf("probe back buffer: %x",uint32(hr))}
++ defer free(&buf)
++ if hr:=call(r.device,devCreateRenderTargetView,buf,0,uintptr(unsafe.Pointer(&rtv)));failed(hr){return fmt.Errorf("probe target view: %x",uint32(hr))}
++ defer free(&rtv)
++ dst:=op
++ if probeNativeSize {dst.Rect=scene.Rect{W:float32(w),H:float32(h)}}
++ once := scene.Scene{Width:w,Height:h,Scale:s.Scale,Ops:[]scene.Op{dst}}
++ built,err:=r.buildScene(&once,&v.b)
++ if err!=nil{return err}
++ if err:=r.drawBuilt(built,&v.b,rtv,nil);err!=nil{return err}
++ r.releaseShared()
++ // Disassociate the render target so destruction and the next draw are safe.
++ call(r.ctx,ctxOMSetRenderTargets,0,0,0)
++ hr:=call(v.chain,scPresent,0,0)
++ if failed(hr){return fmt.Errorf("probe video present: %x",uint32(hr))}
++ v.id,v.version,v.last=op.Image.ID(),op.Image.Version(),op.Rect
++ log.Printf("mygo-probe video %dx%d version=%d",s.Width,s.Height,v.version)
++ return nil
++}
+diff --git a/internal/gpu/damage.go b/internal/gpu/damage.go
+--- a/internal/gpu/damage.go
++++ b/internal/gpu/damage.go
+@@ -1,6 +1,7 @@
+ package gpu
+ 
+ import (
++	"os"
+ 	"fmt"
+ 	"image"
+ 	"slices"
+@@ -187,6 +188,8 @@
+ // backdrops of effects, scene.Differ.AddBackdrops), and returns false when
+ // the frame is better drawn whole: past half the frame together, drawing
+ // it whole costs about the same.
++var profileWideDirty = os.Getenv("MYGO_PROBE_WIDE_DIRTY") == "1"
++
+ func (p *Part) Set(changed []image.Rectangle, w, h int, grow func([]image.Rectangle) []image.Rectangle) bool {
+ 	frame := image.Rect(0, 0, w, h)
+ 	p.rects = p.rects[:0]
+@@ -212,7 +215,7 @@
+ 		n += pixels(r)
+ 		p.Rects = append(p.Rects, Scissor{int32(r.Min.X), int32(r.Min.Y), int32(r.Max.X), int32(r.Max.Y)})
+ 	}
+-	return 2*n < w*h
++	if profileWideDirty { return 10*n < 9*w*h }; return 2*n < w*h
+ }
+ 
+ // within reports whether each rectangle of rects is within one of in.
+diff --git a/internal/scene/probe_retained.go b/internal/scene/probe_retained.go
+new file mode 100644
+--- /dev/null
++++ b/internal/scene/probe_retained.go
+@@ -0,0 +1,6 @@
++package scene
++import "image"
++type ExperimentalRetainedCue struct{ ID,End int64; X,Y,Speed float32; Pixels *image.RGBA }
++type ExperimentalRetainedFrame struct{ Bounds Rect; Ms int64; Playing,Enabled bool; Items []ExperimentalRetainedCue }
++// Benchmark only, published and consumed on the Windows app event thread.
++var ExperimentalRetained ExperimentalRetainedFrame
+diff --git a/ui/probe_retained.go b/ui/probe_retained.go
+new file mode 100644
+--- /dev/null
++++ b/ui/probe_retained.go
+@@ -0,0 +1,10 @@
++package ui
++import (
++ "image"
++ "github.com/egoist/mygo/internal/scene"
++)
++type ProbeRetainedCue = scene.ExperimentalRetainedCue
++func ProbeRetained(bounds Rect, ms int64, playing, enabled bool, items []ProbeRetainedCue){
++ scene.ExperimentalRetained=scene.ExperimentalRetainedFrame{Bounds:scene.Rect{W:bounds.W,H:bounds.H},Ms:ms,Playing:playing,Enabled:enabled,Items:items}
++}
++var _ *image.RGBA
