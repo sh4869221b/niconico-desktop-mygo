@@ -17,6 +17,7 @@ type nativePlayer struct {
 	stream                *ui.VideoPlayer
 	comments              []danmakuCue
 	danmaku               danmakuOverlay
+	commentViewport       ui.Rect
 	status, commentNotice string
 	showComments          bool
 	recorded              bool
@@ -146,13 +147,22 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			n.recorded = true
 			b.recordVideoURL(p.target, p.title)
 		}
-		view := ui.Video(c, s).Grow(1).FillWidth().MinHeight(0).Fit(ui.Contain).Background(ui.RGB(0, 0, 0))
-		if n.showComments && s.Ready() && len(n.comments) > 0 {
-			view.DrawOver(func(paint *ui.Painter, r ui.Rect) {
+		ui.Box(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
+			view := ui.Video(c, s).Fill().Fit(ui.Contain).Background(ui.RGB(0, 0, 0))
+			if n.showComments && s.Ready() && len(n.comments) > 0 {
+				// Use the actual laid-out video size, including during resize.
+				view.DrawOver(func(_ *ui.Painter, r ui.Rect) {
+					r.X, r.Y = 0, 0
+					if n.commentViewport != r {
+						n.commentViewport = r
+						p.win.Invalidate()
+					}
+				})
 				vw, vh := s.Size()
-				n.danmaku.draw(paint, danmakuBounds(r, videoBounds(r, vw, vh)), n.comments, current.Milliseconds())
-			})
-		}
+				r := n.commentViewport
+				n.danmaku.draw(c, danmakuBounds(r, videoBounds(r, vw, vh)), n.comments, current.Milliseconds())
+			}
+		})
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 			label := "再生"
 			if s.Playing() {

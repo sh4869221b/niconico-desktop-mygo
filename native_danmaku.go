@@ -207,8 +207,9 @@ func (l *commentLanes) place(c commentBox, pos commentPosition, width, height fl
 
 type drawnComment struct {
 	commentBox
-	layout *ui.TextLayout
-	style  commentStyle
+	body     string
+	fontSize float32
+	style    commentStyle
 }
 
 type danmakuOverlay struct {
@@ -229,13 +230,14 @@ func danmakuBounds(view, picture ui.Rect) ui.Rect {
 	picture.W = w
 	return picture
 }
-func (d *danmakuOverlay) draw(p *ui.Painter, r ui.Rect, comments []danmakuCue, ms int64) {
+func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue, ms int64) {
 	if r.W < 10 || r.H < 30 {
 		return
 	}
 	if d.width != r.W || d.height != r.H || ms < d.last || ms-d.last >= scrollLifetime {
 		d.width, d.height = r.W, r.H
 		d.lanes.reset(r.H)
+		clear(d.active)
 		d.active = d.active[:0]
 		d.next, _ = slices.BinarySearchFunc(comments, ms-2*scrollLifetime, func(c danmakuCue, t int64) int {
 			if c.start < t {
@@ -275,30 +277,33 @@ func (d *danmakuOverlay) draw(p *ui.Painter, r ui.Rect, comments []danmakuCue, m
 		box := commentBox{start: c.start, end: c.end, width: width, height: height}
 		box.y = d.lanes.place(box, style.position, r.W, r.H)
 		if c.end > ms {
-			d.active = append(d.active, drawnComment{box, layout, style})
+			d.active = append(d.active, drawnComment{box, c.body, font.Size, style})
 		}
 	}
-	p.Clip(r, 0, func() {
-		for _, c := range d.active {
-			x := (r.W - c.width) / 2
-			if c.style.position == scrollComment {
-				x = c.x(ms, r.W)
+	// The toolkit draws a single cached stroke glyph and a fill. Its width
+	// includes both sides of the outline, so double the old outward offset.
+	stroke := 2 * max(1, r.H/280)
+	ui.Box(ctx).Absolute().Left(r.X).Top(r.Y).Size(r.W, r.H).Clip().IgnoreInput(true).AccessHidden(true).Children(func() {
+		for _, item := range d.active {
+			x := (r.W - item.width) / 2
+			if item.style.position == scrollComment {
+				x = item.x(ms, r.W)
 			}
-			if x >= r.W || x+c.width <= 0 {
+			if x >= r.W || x+item.width <= 0 {
 				continue
 			}
-			x, y := r.X+x, r.Y+c.y
-			color := ui.RGB(uint8(c.style.rgb>>16), uint8(c.style.rgb>>8), uint8(c.style.rgb))
+			rgb := item.style.rgb
+			color := ui.RGB(uint8(rgb>>16), uint8(rgb>>8), uint8(rgb))
 			border := ui.RGB(0, 0, 0)
-			if c.style.rgb == 0 {
+			if rgb == 0 {
 				border = ui.RGB(255, 255, 255)
 			}
-			stroke := max(1, r.H/280)
-			p.TextLayout(c.layout, x-stroke, y, border)
-			p.TextLayout(c.layout, x+stroke, y, border)
-			p.TextLayout(c.layout, x, y-stroke, border)
-			p.TextLayout(c.layout, x, y+stroke, border)
-			p.TextLayout(c.layout, x, y, color)
+			label := ui.Text(ctx, item.body).Absolute().Left(x).Top(item.y).Width(item.width+0.5).
+				Font("Arial").FontSize(item.fontSize).FontWeight(700).Lang("ja").LineHeight(1.15).
+				NoWrap().TextColor(color).TextStroke(stroke, border).IgnoreInput(true)
+			if item.style.position != scrollComment {
+				label.TextAlign(ui.Center)
+			}
 		}
 	})
 }

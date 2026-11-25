@@ -117,3 +117,37 @@ func TestDanmakuEntranceAndOrder(t *testing.T) {
 		t.Fatalf("unexpected cue schedule: %+v", cues)
 	}
 }
+
+func TestDanmakuTextKeepsOutlineAndClip(t *testing.T) {
+	var overlay danmakuOverlay
+	r := ui.Rect{X: 20, Y: 10, W: 140, H: 105}
+	cues := makeDanmakuCues([]timedComment{{Body: "TEST", VposMs: 0, Commands: []string{"ue", "red", "big"}}})
+	img := ui.Render(func(ctx *ui.Context) {
+		ui.Box(ctx).Fill().Background(ui.RGB(255, 255, 255)).Children(func() {
+			overlay.draw(ctx, r, cues, 500)
+		})
+	}, 180, 125, 1)
+	red, dark := 0, 0
+	for y := 0; y < 125; y++ {
+		for x := 0; x < 180; x++ {
+			c := img.RGBAAt(x, y)
+			isRed := c.R > 180 && c.G < 90 && c.B < 90
+			isDark := c.R < 90 && c.G < 90 && c.B < 90
+			if !isRed && !isDark {
+				continue
+			}
+			if x < 20 || x >= 160 || y < 10 || y >= 115 {
+				t.Fatalf("comment pixel escaped its clip at %d,%d", x, y)
+			}
+			if isRed {
+				red++
+			}
+			if isDark {
+				dark++
+			}
+		}
+	}
+	if red == 0 || dark == 0 {
+		t.Fatalf("expected red fill and black outline, got %d and %d pixels", red, dark)
+	}
+}
