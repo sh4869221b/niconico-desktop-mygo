@@ -122,6 +122,9 @@ func canonical(raw string) (string, string) {
 		return link, "キーワード検索"
 	}
 	if p == "my/mylist" {
+		if id, ok := strings.CutPrefix(u.EscapedFragment(), "/"); ok && numeric(id, 12) {
+			return mylists + "#/" + id, "マイリスト"
+		}
 		return mylists, "マイリスト"
 	}
 	if !shortPath.MatchString(p) {
