@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"slices"
-	"strings"
+
 	"time"
 
 	"github.com/egoist/mygo"
@@ -16,7 +15,8 @@ import (
 type nativePlayer struct {
 	cancel                context.CancelFunc
 	stream                *ui.VideoPlayer
-	comments              []timedComment
+	comments              []danmakuCue
+	danmaku               danmakuOverlay
 	status, commentNotice string
 	showComments          bool
 	recorded              bool
@@ -76,12 +76,13 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			return
 		}
 		comments, err := nativeComments(ctx, source.watch)
+		cues := makeDanmakuCues(comments)
 		mygo.RunOnMain(func() {
 			if !active() {
 
 				return
 			}
-			n.comments = comments
+			n.comments = cues
 			if err != nil {
 				n.commentNotice = "コメントを取得できませんでした。"
 			} else if len(comments) == 0 {
@@ -149,7 +150,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		if n.showComments && s.Ready() && len(n.comments) > 0 {
 			view.DrawOver(func(paint *ui.Painter, r ui.Rect) {
 				vw, vh := s.Size()
-				drawDanmaku(paint, videoBounds(r, vw, vh), n.comments, current)
+				n.danmaku.draw(paint, danmakuBounds(r, videoBounds(r, vw, vh)), n.comments, current.Milliseconds())
 			})
 		}
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -200,49 +201,4 @@ func videoBounds(r ui.Rect, w, h int) ui.Rect {
 	scale := min(r.W/float32(w), r.H/float32(h))
 	width, height := float32(w)*scale, float32(h)*scale
 	return ui.Rect{X: r.X + (r.W-width)/2, Y: r.Y + (r.H-height)/2, W: width, H: height}
-}
-
-func drawDanmaku(p *ui.Painter, r ui.Rect, cs []timedComment, at time.Duration) {
-	if r.W < 10 || r.H < 30 {
-		return
-	}
-	const travel int64 = 4200
-	now := at.Milliseconds()
-	i, _ := slices.BinarySearchFunc(cs, now-travel, func(c timedComment, t int64) int { return int(c.VposMs - t) })
-	size := float32(22)
-	lanes := min(14, max(1, int(r.H/(size+6))-2))
-	p.Clip(r, 0, func() {
-		for j := i; j < len(cs) && j < i+60 && cs[j].VposMs <= now; j++ {
-			c := cs[j]
-			age := float32(now-c.VposMs) / float32(travel)
-			length := float32(len([]rune(c.Body))) * size
-			x := r.X + r.W - (r.W+length)*age
-			y := r.Y + size + float32(j%lanes)*(size+6)
-			if slices.Contains(c.Commands, "ue") {
-				x = r.X + max(0, (r.W-length)/2)
-				y = r.Y + 3
-			}
-			if slices.Contains(c.Commands, "shita") {
-				x = r.X + max(0, (r.W-length)/2)
-				y = r.Y + r.H - size - 4
-			}
-			color := ui.RGB(255, 255, 255)
-			for _, command := range c.Commands {
-				switch strings.ToLower(command) {
-				case "red":
-					color = ui.RGB(255, 74, 74)
-				case "yellow":
-					color = ui.RGB(255, 240, 0)
-				case "blue":
-					color = ui.RGB(65, 155, 255)
-				case "green":
-					color = ui.RGB(0, 238, 80)
-				case "pink":
-					color = ui.RGB(255, 155, 209)
-				}
-			}
-			p.Text(x+1, y+2, c.Body, size, ui.RGB(0, 0, 0))
-			p.Text(x, y, c.Body, size, color)
-		}
-	})
 }
