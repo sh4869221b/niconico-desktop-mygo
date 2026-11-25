@@ -41,6 +41,9 @@ type browser struct {
 	cancel                       context.CancelFunc
 	epoch                        uint64
 	player                       *playerWindow
+	playMode                     playbackMode
+	showPlaybackSettings         bool
+	playbackPath, playbackNotice string
 }
 
 func main() {
@@ -58,7 +61,14 @@ func main() {
 }
 
 func (b *browser) start(initial string) {
+	b.playMode = webPlayback
 	if dir, err := os.UserConfigDir(); err == nil {
+		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		if mode, err := loadPlayback(b.playbackPath); err == nil {
+			b.playMode = mode
+		} else {
+			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
+		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
@@ -346,6 +356,9 @@ func (b *browser) draw(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
 		b.toolbar(c)
+		if b.showPlaybackSettings {
+			b.drawPlaybackSettings(c)
+		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			b.sidebar(c)
 			if !b.official {
@@ -429,6 +442,9 @@ func (b *browser) toolbar(c *ui.Context) {
 		}
 		if ui.Button(c, "マイリスト").Clicked() {
 			b.navigate(mylists)
+		}
+		if ui.Button(c, "設定").Clicked() {
+			b.showPlaybackSettings = !b.showPlaybackSettings
 		}
 		if ui.Button(c, "ログイン").Clicked() {
 			b.navigate(login)

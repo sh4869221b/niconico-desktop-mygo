@@ -11,10 +11,17 @@ import (
 type playerWindow struct {
 	win                              *mygo.Window
 	view                             *mygo.WebView
+	mode                             playbackMode
+	native                           *nativePlayer
 	target, loadedURL, title, status string
 }
 
-func (b *browser) openPlayer(raw string) {
+func (b *browser) openPlayer(raw string) { b.openPlayerMode(raw, b.playMode) }
+
+func (b *browser) openPlayerMode(raw string, mode playbackMode) {
+	if mode != nativePlayback {
+		mode = webPlayback
+	}
 	route := routeFor(raw)
 	if route.kind != screenVideo {
 		return
@@ -25,7 +32,17 @@ func (b *browser) openPlayer(raw string) {
 		if b.closed {
 			return
 		}
+		if p := b.player; p != nil && p.mode != mode {
+			b.player = nil
+			p.win.Close()
+		}
 		if p := b.player; p != nil {
+			if p.mode == nativePlayback {
+				b.loadNativePlayer(p, route)
+				p.win.Show()
+				p.win.Focus()
+				return
+			}
 			p.target = route.link
 			if p.view != nil {
 				p.load(route.link)
@@ -34,11 +51,11 @@ func (b *browser) openPlayer(raw string) {
 			p.win.Focus()
 			return
 		}
-		p := &playerWindow{target: route.link, status: "再生を準備しています…"}
+		p := &playerWindow{mode: mode, target: route.link, status: "再生を準備しています…"}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
-			Content: ui.View(p.draw),
+			Content: ui.View(func(c *ui.Context) { b.drawPlayer(p, c) }),
 			Page:    mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 		})
 		b.player = p
@@ -48,8 +65,13 @@ func (b *browser) openPlayer(raw string) {
 				b.player = nil
 			}
 			p.view = nil
+			p.stopNative()
 		})
-		b.attachPlayer(p)
+		if mode == nativePlayback {
+			b.loadNativePlayer(p, route)
+		} else {
+			b.attachPlayer(p)
+		}
 	})
 }
 

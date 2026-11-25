@@ -25,3 +25,13 @@ go build -trimpath -ldflags=-H=windowsgui -o NiconicoDesktopMyGo.exe .
 GitHub Actionsの「Windows build」はテスト、静的チェック、Windows x64のビルドを実行し、試用ZIPとSHA-256を成果物として保存します。タグを push するか、`main`で「Windows build」を開いて`vMAJOR.MINOR.PATCH`を指定すると、上記のチェックに合格したファイルだけをGitHub Releasesへ公開します。
 
 公開版はScoopの`mybucket/niconico-desktop-mygo`で導入できます。C#版とは別パッケージです。
+
+## 再生プレーヤーの選択
+
+上部の「設定」から選択できます。切り替えは次に動画を開くときに反映され、アプリを閉じても保持されます。どちらも再生は別ウィンドウです。
+
+- **公式 WebView（既定）**: 従来どおりニコニコ公式のプレーヤーを使います。
+- **独自プレーヤー（試験版）**: Windows Media Foundation とアプリ独自の再生操作・日本語コメント表示を使います。ログインは引き続きニコニコ公式画面で行います。公式と同じ弾幕表示、コメント投稿、すべての配信形式・視聴条件には対応していません。
+- 独自モードの「公式 WebView で開く」は、その動画だけを公式プレーヤーで開き直します。設定は変わりません。
+
+独自モードではニコニコが許可した HLS 配信を読み取ります。再生に必要な配信 Cookie は、その再生中だけ有効なローカル中継が使い、ログイン Cookie は動画情報と再生許可を取得するためのニコニコの限定された経路にのみ送信します。
