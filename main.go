@@ -40,6 +40,7 @@ type browser struct {
 	busy                         bool
 	cancel                       context.CancelFunc
 	epoch                        uint64
+	player                       *playerWindow
 }
 
 func main() {
@@ -74,7 +75,13 @@ func (b *browser) start(initial string) {
 	b.catalog = newCatalog(func(target string) (*http.Cookie, error) {
 		return readSessionCookie(b.session.Cookies.List, target, time.Now())
 	})
-	b.win.OnClosed(func() { b.closed = true; b.cancelLoad() })
+	b.win.OnClosed(func() {
+		b.closed = true
+		b.cancelLoad()
+		if play := b.player; play != nil {
+			play.win.Close()
+		}
+	})
 	b.openNative(routeFor(home), true)
 	if initial != home {
 		b.navigate(initial)
@@ -273,7 +280,11 @@ func (b *browser) persist() bool {
 }
 
 func (b *browser) recordVideo() {
-	e, ok := makeEntry(b.current(), b.currentTitle())
+	b.recordVideoURL(b.current(), b.currentTitle())
+}
+
+func (b *browser) recordVideoURL(raw, title string) {
+	e, ok := makeEntry(raw, title)
 	if !ok || e.Kind != "動画" || e.URL == b.noHistory || len(b.data.History) > 0 && b.data.History[0] == e {
 		return
 	}

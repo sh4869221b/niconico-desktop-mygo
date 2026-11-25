@@ -68,7 +68,7 @@ func TestNativeCatalog(t *testing.T) {
 			c := newCatalog(func(raw string) (*http.Cookie, error) {
 				authCalls++
 				u, err := url.Parse(raw)
-				if err != nil || !privateEndpoint(u) || u.Path != v.path {
+				if err != nil || !sessionEndpoint(u) || u.Path != v.path {
 					t.Errorf("unexpected cookie URL %q", raw)
 				}
 				return &http.Cookie{Name: "user_session", Value: "fixture", Secure: true}, nil
@@ -82,6 +82,9 @@ func TestNativeCatalog(t *testing.T) {
 				}
 				return testResponse(200, v.response), nil
 			})
+			if routeFor(v.route).kind == screenSearch {
+				c.session = nil
+			}
 			p, err := c.load(context.Background(), routeFor(v.route))
 			if err != nil || p.title != v.title || len(p.items) != 1 || p.items[0].link != v.first || p.more != v.more || (authCalls == 1) != private {
 				t.Fatalf("page = %#v; err=%v calls=%d", p, err, authCalls)

@@ -15,7 +15,7 @@ import (
 
 func readSessionCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), target string, now time.Time) (*http.Cookie, error) {
 	u, err := url.Parse(target)
-	if err != nil || !privateEndpoint(u) {
+	if err != nil || !sessionEndpoint(u) {
 		return nil, errSignIn
 	}
 	values, err := list(mygo.CookieFilter{URL: target, Name: "user_session"})
@@ -112,7 +112,7 @@ func (b *browser) refreshNative() {
 				return
 			}
 			b.result, b.resultErr, b.busy = p, err, false
-			b.status = ""
+			b.status = p.searchMode
 			b.win.Invalidate()
 		})
 	}()
@@ -203,7 +203,7 @@ func (b *browser) drawNative(c *ui.Context) {
 			switch r.kind {
 			case screenVideo:
 				if ui.PrimaryButton(scope, "再生").Clicked() {
-					b.openOfficial(r.link)
+					b.openPlayer(r.link)
 				}
 			case screenUser:
 				if ui.Button(scope, "公開マイリスト").Clicked() {

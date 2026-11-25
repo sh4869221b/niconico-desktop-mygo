@@ -93,13 +93,14 @@ type card struct {
 
 type catalogPage struct {
 	title, summary, author string
+	searchMode             string
 	items, links           []card
 	more                   bool
 }
 
 type catalog struct {
 	http *http.Client
-	// Reads a matching cookie from this app's profile only, on private API routes.
+	// Reads a matching cookie from this app's profile only, on approved account API routes.
 	session func(target string) (*http.Cookie, error)
 }
 
@@ -111,9 +112,12 @@ func newCatalog(session func(string) (*http.Cookie, error)) catalog {
 	}}
 }
 
-func privateEndpoint(u *url.URL) bool {
+func sessionEndpoint(u *url.URL) bool {
 	if u.Scheme != "https" || u.Host != apiHost || u.User != nil {
 		return false
+	}
+	if u.Path == accountSearchPath {
+		return true
 	}
 	const base = "/v1/users/me/mylists"
 	id, ok := strings.CutPrefix(u.Path, base+"/")
@@ -134,10 +138,11 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 	req.Header.Set("User-Agent", "NiconicoDesktopMyGo/native-ui")
 	if host == apiHost {
 		req.Header.Set("X-Frontend-Id", "6")
+		req.Header.Set("X-Frontend-Version", "0")
 		req.Header.Set("Accept", "application/json")
 	}
 	if private {
-		if !privateEndpoint(&target) || c.session == nil {
+		if !sessionEndpoint(&target) || c.session == nil {
 			return nil, errSignIn
 		}
 		cookie, err := c.session(target.String())
@@ -206,8 +211,18 @@ func searchParameters(r screenRoute) url.Values {
 }
 
 func (c catalog) search(ctx context.Context, r screenRoute) (catalogPage, error) {
+	if c.session != nil {
+		result, err := c.accountSearch(ctx, r)
+		if !errors.Is(err, errSignIn) {
+			return result, err
+		}
+	}
+	return c.publicSearch(ctx, r)
+}
+
+func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, error) {
 	data, err := c.request(ctx, "snapshot.search.nicovideo.jp", "/api/v2/snapshot/video/contents/search", searchParameters(r), false)
-	p := catalogPage{title: r.key}
+	p := catalogPage{title: r.key, searchMode: "公開検索"}
 	if err != nil {
 		return p, err
 	}
