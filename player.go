@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -8,12 +9,52 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+const webSourceInterval = 500 * time.Millisecond
+
 type playerWindow struct {
-	win                              *mygo.Window
-	view                             *mygo.WebView
-	mode                             playbackMode
-	native                           *nativePlayer
-	target, loadedURL, title, status string
+	win                    *mygo.Window
+	view                   *mygo.WebView
+	mode                   playbackMode
+	native                 *nativePlayer
+	target, title, status  string
+	commentLanguageWarning bool
+	historySuppressed      map[string]bool
+	document               playerDocument
+}
+
+func (p *playerWindow) resumeHistory(video string) {
+	delete(p.historySuppressed, video)
+}
+
+type playerDocument struct {
+	loaded               bool
+	revision             uint64
+	pending              string
+	source, video, title string
+	previousTitle        string
+}
+
+func (d *playerDocument) observe(raw, title string) bool {
+	changed := d.source != raw
+	d.source = raw
+	r := routeFor(raw)
+	video := ""
+	if r.kind == screenVideo {
+		video = r.link
+	}
+	if d.video != video {
+		if d.title != "" {
+			d.previousTitle = d.title
+		}
+		d.video, d.title = video, ""
+	}
+	// A SPA can update the title and the URL in either order. Keep the first
+	// title for this video, and wait past the previous video's title on a new URL.
+	if title = strings.TrimSpace(title); d.video != "" && d.title == "" && title != "" && title != d.previousTitle {
+		d.title = title
+		changed = true
+	}
+	return changed
 }
 
 func (b *browser) openPlayer(raw string) { b.openPlayerMode(raw, b.playMode) }
@@ -26,10 +67,12 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 	if route.kind != screenVideo {
 		return
 	}
+	b.playbackRequest++
+	request := b.playbackRequest
 	// UI callbacks run while the frame is being built; create and navigate
 	// the native window after that callback finishes.
 	go mygo.RunOnMain(func() {
-		if b.closed {
+		if b.closed || b.playbackRequest != request {
 			return
 		}
 		if p := b.player; p != nil && p.mode != mode {
@@ -37,21 +80,22 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			p.win.Close()
 		}
 		if p := b.player; p != nil {
+			p.resumeHistory(route.link)
 			if p.mode == nativePlayback {
 				b.loadNativePlayer(p, route)
 				p.win.Show()
 				p.win.Focus()
 				return
 			}
-			p.target = route.link
+			p.target = route.target
 			if p.view != nil {
-				p.load(route.link)
+				p.load(route.target)
 			}
 			p.win.Show()
 			p.win.Focus()
 			return
 		}
-		p := &playerWindow{mode: mode, target: route.link, status: "再生を準備しています…"}
+		p := &playerWindow{mode: mode, target: route.target, status: "再生を準備しています…"}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
@@ -80,7 +124,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 	if !active() {
 		return
 	}
-	_ = setJapaneseComments(b.session.Cookies.Set, time.Now())
+	p.commentLanguageWarning = setJapaneseComments(b.session.Cookies.Set, time.Now()) != nil
 	if !active() {
 		return
 	}
@@ -100,9 +144,17 @@ func (b *browser) attachPlayer(p *playerWindow) {
 	}
 	p.view = view
 	page := view.Page()
-	toLibrary := func(raw string) bool {
+	routeLink := func(raw string) bool {
 		dest := routeFor(raw)
-		if dest.kind == screenOfficial || dest.link == routeFor(p.target).link {
+		switch dest.kind {
+		case screenOfficial:
+			return false
+		case screenVideo:
+			if b.playMode == nativePlayback && dest.link != routeFor(page.URL()).link {
+				b.openPlayer(dest.target)
+				return true
+			}
+			p.resumeHistory(dest.link)
 			return false
 		}
 		go mygo.RunOnMain(func() {
@@ -115,7 +167,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		return true
 	}
 	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
-		if !active() || allowedURL(e.URL) == nil || e.UserInitiated && toLibrary(e.URL) {
+		if !active() || allowedURL(e.URL) == nil || e.UserInitiated && routeLink(e.URL) {
 			e.PreventDefault()
 		}
 	})
@@ -124,7 +176,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		if !active() || u == nil || !req.UserInitiated && !strings.EqualFold(u.Hostname(), "account.nicovideo.jp") {
 			return nil
 		}
-		if req.UserInitiated && toLibrary(u.String()) {
+		if req.UserInitiated && routeLink(u.String()) {
 			return nil
 		}
 		go mygo.RunOnMain(func() {
@@ -136,26 +188,21 @@ func (b *browser) attachPlayer(p *playerWindow) {
 	})
 	page.OnPageTitleUpdated(func(e *mygo.TitleEvent) {
 		e.PreventDefault()
-		if !active() {
-			return
-		}
-		if title := strings.TrimSpace(e.Title); title != "" {
-			p.title = title
-			p.win.SetTitle(title + " · " + appName)
-			if p.loadedURL != "" {
-				b.recordVideoURL(p.loadedURL, title)
-			}
+	})
+	page.OnDidNavigate(func(_ string) {
+		if active() {
+			p.document = playerDocument{revision: p.document.revision + 1}
+			p.win.SetTitle(appName + " · プレーヤー")
 		}
 	})
 	page.OnDidFinishLoad(func() {
 		if !active() {
 			return
 		}
-		raw := page.URL()
-		if allowedURL(raw) != nil {
-			p.loadedURL = raw
+		p.document.pending = ""
+		p.document.loaded = allowedURL(page.URL()) != nil
+		if p.document.loaded {
 			p.status = ""
-			b.recordVideoURL(raw, p.title)
 		}
 		p.win.Invalidate()
 	})
@@ -163,6 +210,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		if !active() {
 			return
 		}
+		p.document.loaded = false
 		p.status = "動画ページを開けませんでした。"
 		p.win.Invalidate()
 	})
@@ -170,18 +218,81 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		if !active() {
 			return
 		}
+		p.document.loaded = false
 		p.status = "プレーヤーが終了しました。ウィンドウを閉じて再度開いてください。"
 		p.win.Invalidate()
 	})
 	p.load(p.target)
+	watchWebSource(active, func() { b.observePlayerPage(p, page, active) })
+}
+
+func watchWebSource(active func() bool, observe func()) {
+	go func() {
+		ticker := time.NewTicker(webSourceInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			keep := false
+			mygo.RunOnMain(func() {
+				keep = active()
+				if keep {
+					observe()
+				}
+			})
+			if !keep {
+				return
+			}
+		}
+	}()
+}
+
+func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active func() bool) {
+	d := &p.document
+	if !d.loaded || page.IsLoading() {
+		return
+	}
+	raw := page.URL()
+	replay := d.pending != ""
+	if replay && raw != d.pending || !replay && raw == d.source && (d.title != "" || d.video == "") {
+		return
+	}
+	revision := d.revision
+	title := ""
+	if routeFor(raw).kind == screenVideo {
+		// Sample URL and title in one renderer call. Eval can pump the UI loop,
+		// so validate the load and source again before using its result.
+		ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
+		value, err := page.EvalContext(ctx, `[location.href, document.title.slice(0, 1024)]`)
+		cancel()
+		if pair, ok := value.([]any); err == nil && ok && len(pair) == 2 && pair[0] == raw {
+			title, _ = pair[1].(string)
+		}
+	}
+	if !active() || !d.loaded || revision != d.revision || page.IsLoading() || page.URL() != raw {
+		return
+	}
+	d.pending = ""
+	if !d.observe(raw, title) && !replay {
+		return
+	}
+	if d.video != "" {
+		b.recordVideo(p, d.video, d.title)
+	}
+	windowTitle := appName + " · プレーヤー"
+	if d.title != "" {
+		windowTitle = d.title + " · " + appName
+	}
+	p.win.SetTitle(windowTitle)
 }
 
 func (p *playerWindow) load(target string) {
 	if p.view == nil || allowedURL(target) == nil {
 		return
 	}
-	p.target, p.loadedURL, p.title, p.status = target, "", "", ""
+	p.target, p.status = target, ""
+	p.document.pending = target
+	p.document.revision++
 	if err := p.view.Page().LoadURL(target); err != nil {
+		p.document.pending = ""
 		p.status = "動画ページを開けませんでした。"
 	}
 	p.win.Invalidate()
@@ -194,6 +305,9 @@ func (p *playerWindow) draw(c *ui.Context) {
 		}
 		if p.status != "" {
 			ui.Text(c, p.status).Wrap()
+		}
+		if p.commentLanguageWarning {
+			ui.Text(c, commentLanguageWarning).TextColor(c.Theme().TextMuted).Padding(5, 12).Wrap()
 		}
 	})
 }

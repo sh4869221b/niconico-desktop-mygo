@@ -76,9 +76,8 @@ func (b *browser) pageNative(delta int) {
 		return
 	}
 	r := b.navigation[b.index]
-	r.page += delta
-	if r.page >= 0 && r.page <= 4166 {
-		b.openNative(r, true)
+	if page := r.page + delta; page >= 0 && page <= maxCatalogPage {
+		b.openNative(r.withPage(page), true)
 	}
 }
 
@@ -119,25 +118,41 @@ func (b *browser) refreshNative() {
 	b.win.Invalidate()
 }
 
-// Only redirect explicit first-party links from a loaded player; don't
-// interfere with redirects and callbacks used by sign-in or playback.
-func (b *browser) redirectFromPlayer(target string) bool {
-	r := routeFor(target)
-	current := routeFor(b.source)
-	if !b.loaded || current.kind != screenVideo || r.kind == screenOfficial || current.link == r.link {
+// The main WebView handles browsing and login. The playback window owns watch pages.
+func (b *browser) playOfficialLink(view *mygo.WebView, raw string, alreadyNavigated bool) bool {
+	r := routeFor(raw)
+	if r.kind != screenVideo {
 		return false
 	}
-	view := b.web
 	go mygo.RunOnMain(func() {
-		if !b.closed && b.official && b.web == view {
-			b.openNative(r, true)
+		if b.closed || !b.official || b.web != view {
+			return
 		}
+		if alreadyNavigated {
+			if view.Page().URL() != raw {
+				return
+			}
+			// A within-document or history navigation can bypass OnWillNavigate.
+			// Destroy the view before starting playback so the main window cannot keep playing.
+			target := b.source
+			if allowedURL(target) == nil {
+				target = b.officialTarget
+			}
+			b.web = nil
+			view.Destroy()
+			b.openOfficial(target)
+		}
+		b.openPlayer(r.target)
 	})
 	return true
 }
 
 func (b *browser) openOfficial(target string) {
 	if allowedURL(target) == nil || b.closed {
+		return
+	}
+	if routeFor(target).kind == screenVideo {
+		b.openPlayer(target)
 		return
 	}
 	b.cancelLoad()
@@ -203,7 +218,7 @@ func (b *browser) drawNative(c *ui.Context) {
 			switch r.kind {
 			case screenVideo:
 				if ui.PrimaryButton(scope, "再生").Clicked() {
-					b.openPlayer(r.link)
+					b.openPlayer(r.target)
 				}
 			case screenUser:
 				if ui.Button(scope, "公開マイリスト").Clicked() {
@@ -222,7 +237,7 @@ func (b *browser) drawNative(c *ui.Context) {
 				}
 			}
 			if r.kind != screenVideo && ui.Button(scope, "公式ページ").Clicked() {
-				b.openOfficial(r.link)
+				b.openOfficial(r.target)
 			}
 		})
 		if b.busy {

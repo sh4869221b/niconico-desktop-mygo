@@ -28,7 +28,6 @@ type browser struct {
 	commentLanguageWarning       bool
 	data                         library
 	history, loaded, closed      bool
-	noHistory                    string
 	session                      *mygo.Session
 	official, openingOfficial    bool
 	officialTarget               string
@@ -41,6 +40,7 @@ type browser struct {
 	cancel                       context.CancelFunc
 	epoch                        uint64
 	player                       *playerWindow
+	playbackRequest              uint64
 	playMode                     playbackMode
 	showPlaybackSettings         bool
 	playbackPath, playbackNotice string
@@ -131,7 +131,7 @@ func (b *browser) attachOfficial() {
 		if allowedURL(e.URL) == nil {
 			e.PreventDefault()
 			b.status = "ニコニコ以外への移動をブロックしました。"
-		} else if e.UserInitiated && b.redirectFromPlayer(e.URL) {
+		} else if b.playOfficialLink(view, e.URL, false) {
 			e.PreventDefault()
 		} else {
 			b.loading()
@@ -145,7 +145,7 @@ func (b *browser) attachOfficial() {
 		u := allowedURL(req.URL)
 		if u != nil && (req.UserInitiated || strings.EqualFold(u.Hostname(), "account.nicovideo.jp")) {
 			target := u.String()
-			if req.UserInitiated && b.redirectFromPlayer(target) {
+			if b.playOfficialLink(view, target, false) {
 				return nil
 			}
 			// Do not re-enter the WebView2 callback to navigate.
@@ -160,11 +160,12 @@ func (b *browser) attachOfficial() {
 		}
 		return nil
 	})
-	p.OnDidNavigate(func(_ string) {
+	p.OnDidNavigate(func(raw string) {
 		if !active() {
 			return
 		}
 		b.loading()
+		b.playOfficialLink(view, raw, true)
 		b.win.Invalidate()
 	})
 	p.OnPageTitleUpdated(func(e *mygo.TitleEvent) {
@@ -173,9 +174,6 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.title = e.Title
-		if b.loaded {
-			b.recordVideo()
-		}
 		b.win.Invalidate()
 	})
 	p.OnDidFinishLoad(func() {
@@ -183,12 +181,14 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		raw := p.URL()
+		if b.playOfficialLink(view, raw, true) {
+			return
+		}
 		b.source, b.loaded = raw, allowedURL(raw) != nil
 		b.status = "ニコニコ公式ページ"
 		if !b.loaded {
 			b.status = "対応するページを開いてください。"
 		}
-		b.recordVideo()
 		b.win.Invalidate()
 	})
 	p.OnDidFailLoad(func(_ *mygo.LoadError) {
@@ -209,34 +209,19 @@ func (b *browser) attachOfficial() {
 	})
 	b.loadOfficial(b.officialTarget)
 	// pushState and hash changes do not always emit a new-document event.
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			keep := false
-			mygo.RunOnMain(func() {
-				keep = active()
-				if !keep || !b.loaded {
-					return
-				}
-				if raw := p.URL(); raw != b.source {
-					b.source = raw
-					b.recordVideo()
-					b.win.Invalidate()
-				}
-			})
-			if !keep {
-				return
-			}
+	watchWebSource(active, func() {
+		raw := p.URL()
+		if !b.playOfficialLink(view, raw, true) && b.loaded && raw != b.source {
+			b.source = raw
+			b.win.Invalidate()
 		}
-	}()
+	})
 }
 
 func (b *browser) loading() {
 	b.loaded = false
 	b.status = "読み込み中…"
 	b.title = ""
-	b.noHistory = ""
 }
 
 func (b *browser) loadOfficial(target string) {
@@ -289,17 +274,22 @@ func (b *browser) persist() bool {
 	return true
 }
 
-func (b *browser) recordVideo() {
-	b.recordVideoURL(b.current(), b.currentTitle())
-}
-
-func (b *browser) recordVideoURL(raw, title string) {
+func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	e, ok := makeEntry(raw, title)
-	if !ok || e.Kind != "動画" || e.URL == b.noHistory || len(b.data.History) > 0 && b.data.History[0] == e {
+	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
+		return
+	}
+	if e.Title == e.URL {
+		if i := slices.IndexFunc(b.data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+			e.Title = b.data.History[i].Title
+		}
+	}
+	if len(b.data.History) > 0 && b.data.History[0] == e {
 		return
 	}
 	b.data.History = putFirst(b.data.History, e, 100)
 	b.persist()
+	b.win.Invalidate()
 }
 
 func (b *browser) pinCurrent() {
@@ -330,8 +320,11 @@ func (b *browser) remove(e entry) {
 	items := &b.data.Pins
 	if b.history {
 		items = &b.data.History
-		if u, _ := canonical(b.current()); u == e.URL {
-			b.noHistory = u
+		if p := b.player; p != nil {
+			if p.historySuppressed == nil {
+				p.historySuppressed = make(map[string]bool)
+			}
+			p.historySuppressed[e.URL] = true
 		}
 	}
 	*items = slices.DeleteFunc(*items, func(x entry) bool { return x.URL == e.URL })
@@ -374,7 +367,7 @@ func (b *browser) draw(c *ui.Context) {
 		ui.Row(c).FillWidth().Padding(5, 12).Gap(12).Children(func() {
 			ui.Text(c, b.status).TextColor(t.TextMuted)
 			if b.official && b.commentLanguageWarning {
-				ui.Text(c, "日本語コメントの設定に失敗しました。アプリを再起動してください。").TextColor(t.TextMuted)
+				ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted)
 			}
 			if b.storeWarning != "" {
 				ui.Text(c, b.storeWarning).TextColor(t.TextMuted)

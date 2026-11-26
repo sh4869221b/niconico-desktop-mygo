@@ -18,6 +18,7 @@ type nativePlayer struct {
 	stream                *ui.VideoPlayer
 	comments              []timedComment
 	status, commentNotice string
+	startAt               time.Duration
 	showComments          bool
 	recorded              bool
 }
@@ -36,8 +37,8 @@ func (p *playerWindow) stopNative() {
 func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &nativePlayer{cancel: cancel, status: "配信を準備しています…", showComments: true}
-	p.native, p.target = n, route.link
+	n := &nativePlayer{cancel: cancel, status: "配信を準備しています…", startAt: route.startTime(), showComments: true}
+	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
 	p.win.Invalidate()
 	var session *http.Cookie
@@ -140,11 +141,18 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			})
 			return
 		}
-		current, duration := s.Position(), s.Duration()
-		if s.Ready() && !n.recorded {
-			n.recorded = true
-			b.recordVideoURL(p.target, p.title)
+		duration := s.Duration()
+		if s.Ready() {
+			if n.startAt > 0 && duration > 0 {
+				s.Seek(min(n.startAt, duration))
+				n.startAt = 0
+			}
+			if !n.recorded {
+				n.recorded = true
+				b.recordVideo(p, p.target, p.title)
+			}
 		}
+		current := s.Position()
 		view := ui.Video(c, s).Grow(1).FillWidth().MinHeight(0).Fit(ui.Contain).Background(ui.RGB(0, 0, 0))
 		if n.showComments && s.Ready() && len(n.comments) > 0 {
 			view.DrawOver(func(paint *ui.Painter, r ui.Rect) {

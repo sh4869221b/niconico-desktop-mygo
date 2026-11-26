@@ -48,6 +48,55 @@ func TestNativeRoutes(t *testing.T) {
 	}
 }
 
+func TestRouteTargetsAndSavedIdentity(t *testing.T) {
+	watch := home + "watch/sm9"
+	for _, input := range []string{watch, "https://sp.nicovideo.jp/watch/SM9", "https://nico.ms/sm9"} {
+		target := watch + "?from=60&ref=test#player"
+		r := routeFor(resolve(input+"?from=60&ref=test#player", false))
+		if r.kind != screenVideo || r.link != watch || r.target != target || r.startTime() != time.Minute {
+			t.Errorf("watch route for %q = %+v (start %s)", input, r, r.startTime())
+		}
+		if e, ok := makeEntry(r.target, "動画"); !ok || e.URL != watch {
+			t.Errorf("saved watch = %+v, %v", e, ok)
+		}
+	}
+	for _, from := range []string{"-5", "x", "9223372037", "18446744073709551616"} {
+		if got := routeFor(watch + "?from=" + from).startTime(); got != 0 {
+			t.Errorf("from=%s yielded %s", from, got)
+		}
+	}
+
+	for _, path := range []string{"search/kitty", "tag/kitty"} {
+		base := home + path
+		input := base + "?sort=v&order=a&page=3&f_range=0#results"
+		r := routeFor(resolve(input, false))
+		if r.kind != screenSearch || r.page != 2 || r.target != input || r.link != base+"?order=a&sort=v" {
+			t.Errorf("search route = %+v", r)
+		}
+		if p := searchParameters(r); p.Get("_offset") != "48" || p.Get("_sort") != "+viewCounter" {
+			t.Errorf("snapshot search = %v", p)
+		}
+		if p := accountSearchParameters(r); p.Get("page") != "3" || p.Get("sortKey") != "viewCount" {
+			t.Errorf("account search = %v", p)
+		}
+		for _, page := range []struct {
+			index int
+			query string
+		}{{0, ""}, {3, "4"}} {
+			next := r.withPage(page.index)
+			u, _ := url.Parse(next.target)
+			if next.page != page.index || next.link != r.link || u.Query().Get("page") != page.query || u.Query().Get("f_range") != "0" || u.Fragment != "results" {
+				t.Errorf("changed search page = %+v", next)
+			}
+		}
+		for _, page := range []string{"0", "-1", "x", "4168"} {
+			if r := routeFor(base + "?page=" + page); r.page != 0 || r.target != base+"?page="+page {
+				t.Errorf("unsupported page = %+v", r)
+			}
+		}
+	}
+}
+
 func TestNativeCatalog(t *testing.T) {
 	tests := []struct {
 		route, path, response, title, first string
@@ -155,10 +204,10 @@ func TestNativeVideoDescription(t *testing.T) {
 		if r.URL.Host != "ext.nicovideo.jp" || r.URL.Path != "/api/getthumbinfo/sm9" || r.Header.Get("Cookie") != "" {
 			t.Fatal("incorrect video request")
 		}
-		return testResponse(200, `<nicovideo_thumb_response status="ok"><thumb><title>動画</title><description><![CDATA[文字<br><script>ignored</script><a href="/mylist/52">一覧</a> https://nico.ms/sm12。 https://www.nicovideo.jp.evil.test/watch/sm15]]></description><user_id>123</user_id><user_nickname>投稿者</user_nickname></thumb></nicovideo_thumb_response>`), nil
+		return testResponse(200, `<nicovideo_thumb_response status="ok"><thumb><title>動画</title><description><![CDATA[文字<br><script>ignored</script><a href="/mylist/52">一覧</a> https://nico.ms/sm12?from=60。 https://www.nicovideo.jp.evil.test/watch/sm15]]></description><user_id>123</user_id><user_nickname>投稿者</user_nickname></thumb></nicovideo_thumb_response>`), nil
 	})
 	p, err := c.load(context.Background(), routeFor(home+"watch/sm9"))
-	if err != nil || p.title != "動画" || p.author != "投稿者" || len(p.links) != 4 || p.links[2].link != home+"mylist/52" || p.links[3].link != home+"watch/sm12" || strings.Contains(p.summary, "ignored") {
+	if err != nil || p.title != "動画" || p.author != "投稿者" || len(p.links) != 4 || p.links[2].link != home+"mylist/52" || p.links[3].link != home+"watch/sm12?from=60" || strings.Contains(p.summary, "ignored") {
 		t.Fatalf("page = %#v err=%v", p, err)
 	}
 }

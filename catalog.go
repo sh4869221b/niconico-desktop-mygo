@@ -19,6 +19,7 @@ import (
 
 const apiHost = "nvapi.nicovideo.jp"
 const pageSize = 24
+const maxCatalogPage = 4166 // zero based, within the snapshot API's 100,000 results
 const responseLimit = 4 << 20
 
 var errSignIn = errors.New("ニコニコへのログインが必要です")
@@ -40,23 +41,31 @@ const (
 )
 
 type screenRoute struct {
-	kind screenKind
-	link string
-	key  string
-	page int // zero based
+	kind   screenKind
+	link   string // canonical link used for identity and API parameters
+	target string // URL opened by the player or the official page button
+	key    string
+	page   int // zero based
 }
 
 func routeFor(raw string) screenRoute {
-	r := screenRoute{link: raw}
-	if u := allowedURL(raw); u != nil && siteHost(u) && strings.Trim(u.Path, "/") == "" {
-		return screenRoute{kind: screenHome, link: home}
+	r := screenRoute{target: raw}
+	input := allowedURL(raw)
+	if input == nil {
+		return r
+	}
+	if siteHost(input) && strings.Trim(input.Path, "/") == "" {
+		r.kind, r.link = screenHome, home
+		return r
 	}
 	link, kind := canonical(raw)
 	if link == mylists {
-		return screenRoute{kind: screenOwnLists, link: link}
+		r.kind, r.link = screenOwnLists, link
+		return r
 	}
 	if id, ok := strings.CutPrefix(link, mylists+"#/"); ok {
-		return screenRoute{kind: screenOwnList, link: link, key: id}
+		r.kind, r.link, r.key = screenOwnList, link, id
+		return r
 	}
 	if link == "" {
 		return r
@@ -69,9 +78,16 @@ func routeFor(raw string) screenRoute {
 		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
 		r.kind = screenSearch
 		r.key, _ = url.PathUnescape(term)
+		if page, err := strconv.Atoi(input.Query().Get("page")); err == nil && page > 0 && page <= maxCatalogPage+1 {
+			r.page = page - 1
+		}
 	case "動画":
 		if watchSegment.MatchString(r.key) {
 			r.kind = screenVideo
+			// Use the desktop watch page for mobile and short links too.
+			u.RawQuery, u.ForceQuery = input.RawQuery, input.ForceQuery
+			u.Fragment, u.RawFragment = input.Fragment, input.RawFragment
+			r.target = u.String()
 		}
 	case "ユーザー":
 		if numeric(parts[1], 9) {
@@ -85,6 +101,31 @@ func routeFor(raw string) screenRoute {
 		}
 	}
 	return r
+}
+
+func (r screenRoute) withPage(page int) screenRoute {
+	r.page = page
+	if r.kind == screenSearch {
+		u, _ := url.Parse(r.target)
+		query := u.Query()
+		if page == 0 {
+			query.Del("page")
+		} else {
+			query.Set("page", strconv.Itoa(page+1))
+		}
+		u.RawQuery = query.Encode()
+		r.target = u.String()
+	}
+	return r
+}
+
+func (r screenRoute) startTime() time.Duration {
+	u, _ := url.Parse(r.target)
+	seconds, err := strconv.ParseUint(u.Query().Get("from"), 10, 64)
+	if err != nil || seconds > uint64((1<<63-1)/time.Second) {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 type card struct {
@@ -408,7 +449,7 @@ func plainDescription(value string) (string, []card) {
 			return
 		}
 		seen[link] = true
-		links = append(links, card{link: link, title: kind + " · " + strings.TrimPrefix(link, home)})
+		links = append(links, card{link: routeFor(raw).target, title: kind + " · " + strings.TrimPrefix(link, home)})
 	}
 	z := html.NewTokenizer(strings.NewReader(value))
 	var ignored string
