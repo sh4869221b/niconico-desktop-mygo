@@ -350,6 +350,7 @@ func (b *browser) browseFromPlayer(p *playerWindow, dest screenRoute, alreadyNav
 				return
 			}
 			// A history or same-document navigation may have already left the video.
+			p.expireWebRestore(time.Now())
 			p.captureWebPosition(page)
 			if b.closed || b.player != p || p.view == nil || p.document.revision != revision || page.URL() != dest.target {
 				return
@@ -392,6 +393,9 @@ func watchWebSource(active func() bool, observe func()) {
 
 func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active func() bool) {
 	d := &p.document
+	if p.expireWebRestore(time.Now()) {
+		p.showWebRestoreFailure()
+	}
 	if d.loading || !d.loaded || page.IsLoading() {
 		return
 	}
@@ -403,7 +407,6 @@ func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active fun
 	if d.observe(raw, route) {
 		if d.video != "" {
 			p.visitWebVideo(d.video)
-			p.notePlayedWatch(route, false)
 			b.recordVideo(p, d.video, d.title)
 		}
 		p.setWebTitle()

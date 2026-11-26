@@ -8,6 +8,7 @@ import (
 	"math"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -29,31 +30,22 @@ type webPlaybackRestore struct {
 	resume        bool
 }
 
-func playbackPosition(value any, videoID string) *webPlaybackPosition {
-	fields, ok := value.([]any)
-	if !ok || len(fields) != 3 || videoID == "" || fields[0] != videoID {
-		return nil
-	}
-	seconds, timeOK := fields[1].(float64)
-	paused, pauseOK := fields[2].(bool)
-	if !timeOK || !pauseOK || !(seconds >= 0 && seconds < 1<<33) {
-		return nil
-	}
-	return &webPlaybackPosition{seconds: seconds, paused: paused}
-}
-
 func playbackRestoreURL(target string, seconds float64) string {
 	u, err := url.Parse(target)
 	if err != nil {
 		return target
 	}
-	query, err := url.ParseQuery(u.RawQuery)
-	if err != nil {
-		return target
-	}
 	// The page's initial seek should agree with the restore script, which applies fractions of a second.
-	query.Set("from", strconv.FormatFloat(math.Floor(seconds), 'f', 0, 64))
-	u.RawQuery = query.Encode()
+	query := make([]string, 0, strings.Count(u.RawQuery, "&")+2)
+	if u.RawQuery != "" {
+		for field := range strings.SplitSeq(u.RawQuery, "&") {
+			key, _, _ := strings.Cut(field, "=")
+			if name, _ := url.QueryUnescape(key); name != "from" {
+				query = append(query, field)
+			}
+		}
+	}
+	u.RawQuery = strings.Join(append(query, "from="+strconv.FormatFloat(math.Floor(seconds), 'f', 0, 64)), "&")
 	return u.String()
 }
 
@@ -63,6 +55,9 @@ func (p *playerWindow) notePlayedWatch(route screenRoute, newDocument bool) {
 	}
 	if newDocument || p.playedWatch.link != route.link {
 		p.playedPosition = nil
+	}
+	if p.restoring != nil && p.restoring.video != route.key {
+		p.restoring = nil
 	}
 	p.playedWatch = route
 }
@@ -75,17 +70,37 @@ func (p *playerWindow) finishWebLoad(raw string) {
 }
 
 func (p *playerWindow) captureWebPosition(page *mygo.Page) {
-	played, revision := p.playedWatch, p.document.revision
-	if played.kind != screenVideo || p.restoring != nil {
-		return
-	}
+	source, revision := page.URL(), p.document.revision
+	played, position := p.playedWatch, p.playedPosition
 	ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
 	defer cancel()
 	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.snapshot() ?? null`)
-	if err == nil && p.view != nil && p.playedWatch == played && p.document.revision == revision {
-		if snapshot := playbackPosition(value, played.key); snapshot != nil {
-			p.playedPosition = snapshot
-		}
+	if err == nil && p.view != nil && p.playedWatch == played && p.playedPosition == position &&
+		p.document.revision == revision && page.URL() == source {
+		p.recordWebSnapshot(value, routeFor(source))
+	}
+}
+
+func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
+	fields, ok := value.([]any)
+	if !ok || len(fields) != 3 {
+		return
+	}
+	raw, urlOK := fields[0].(string)
+	seconds, timeOK := fields[1].(float64)
+	paused, pauseOK := fields[2].(bool)
+	if !urlOK || !timeOK || !pauseOK || !(seconds >= 0 && seconds < 1<<33) {
+		return
+	}
+	watch := routeFor(raw)
+	if watch.kind != screenVideo || source.kind == screenVideo && source.link != watch.link {
+		return
+	}
+	// The bridge can still offer B's last sample after a same-document search.
+	// Completing a restore for B takes precedence over B's transient initial state.
+	p.notePlayedWatch(watch, false)
+	if p.restoring == nil {
+		p.playedPosition = &webPlaybackPosition{seconds: seconds, paused: paused}
 	}
 }
 
@@ -109,15 +124,22 @@ func (p *playerWindow) returnToPlayedWatch() {
 	p.load(target)
 }
 
+func (p *playerWindow) expireWebRestore(now time.Time) bool {
+	if p.restoring == nil || now.Before(p.restoring.deadline) {
+		return false
+	}
+	p.restoring = nil
+	return true
+}
+
+func (p *playerWindow) showWebRestoreFailure() {
+	p.status = "再生状態を復元できませんでした。"
+	p.win.Invalidate()
+}
+
 func (p *playerWindow) applyWebRestore(page *mygo.Page, route screenRoute) {
 	state := p.restoring
 	if state == nil || route.kind != screenVideo || route.key != state.video {
-		return
-	}
-	if time.Now().After(state.deadline) {
-		p.restoring = nil
-		p.status = "再生状態を復元できませんでした。"
-		p.win.Invalidate()
 		return
 	}
 	encodedVideo, _ := json.Marshal(state.video)
@@ -144,7 +166,6 @@ func (p *playerWindow) applyWebRestore(page *mygo.Page, route screenRoute) {
 		p.restoring = nil
 	case "blocked":
 		p.restoring = nil
-		p.status = "再生状態を復元できませんでした。"
-		p.win.Invalidate()
+		p.showWebRestoreFailure()
 	}
 }

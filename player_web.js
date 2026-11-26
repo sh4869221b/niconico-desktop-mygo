@@ -8,39 +8,51 @@
     if (window.__nicoDesktopMedia || !initialID || location.protocol !== 'https:' ||
         !/^(?:(?:www|sp|video)\.)?nicovideo\.jp$/.test(location.hostname)) return;
 
-    let mediaID = initialID;
-    let previousMedia;
-    let previousSource;
+    // The watch route consumes the server-response meta on hydration. Use its
+    // live loader data and the official content element (excluding ads/previews).
+    const contentSelector = '[data-name="stage"] video[data-name="video-content"]';
+    const watchRoute = 'routes/_web.watch.$id.$';
+    const mediaOwners = new Map();
     let lastSample;
     let pausedRestore;
 
-    function mediaFor(id) {
-        if (!id || watchID(location.href) !== id) return;
-        const videos = [...document.querySelectorAll('video')].filter(video =>
-            video.readyState >= 1 && !video.error && Number.isFinite(video.duration) && video.duration > 0);
-        if (videos.length !== 1) return;
-        const video = videos[0];
-        if (id !== mediaID) {
-            // A new URL can precede the new video element or source in a SPA.
-            if (!previousMedia || video === previousMedia && video.currentSrc === previousSource) return;
-            try {
-                const response = JSON.parse(document.querySelector('meta[name="server-response"]').content);
-                if (response.data.response.$watchV4.data.video.id !== id) return;
-            } catch {
-                return;
-            }
-            mediaID = id;
-        }
-        previousMedia = video;
-        previousSource = video.currentSrc;
-        return video;
+    function committedWatch(id) {
+        const state = window.__reactRouterDataRouter?.state;
+        if (!state) return id === initialID;
+        const data = state.loaderData?.[watchRoute];
+        return !state.errors && state.navigation?.state === 'idle' &&
+            state.matches?.some(match => match.route.id === watchRoute && match.params.id === id) &&
+            data?.ok === true && data.data?.response?.$watchV4?.data?.video?.id === id;
     }
 
-    function remember() {
+    function contentVideo() {
+        const videos = document.querySelectorAll(contentSelector);
+        if (videos.length === 1) return videos[0];
+    }
+
+    document.addEventListener('loadstart', event => {
+        const video = contentVideo();
+        if (!event.isTrusted || !video || event.target !== video) return;
+        const source = video.currentSrc;
         const id = watchID(location.href);
-        const video = mediaFor(id);
-        if (video && Number.isFinite(video.currentTime) && video.currentTime >= 0) {
-            lastSample = [id, video.currentTime, video.paused || video.ended];
+        // A changed URL or a late event for the old source cannot relabel it.
+        if (source && !mediaOwners.has(source) && id && committedWatch(id)) {
+            mediaOwners.set(source, id);
+        }
+    }, true);
+
+    function mediaFor(id) {
+        if (!id || watchID(location.href) !== id) return;
+        const video = contentVideo();
+        if (!video || video.readyState < 1 || video.error || !Number.isFinite(video.duration) || video.duration <= 0) return;
+        if (mediaOwners.get(video.currentSrc) === id) return video;
+    }
+
+    function remember(target) {
+        const url = location.href;
+        const video = mediaFor(watchID(url));
+        if (video && (!target || target === video) && Number.isFinite(video.currentTime) && video.currentTime >= 0) {
+            lastSample = [url, video.currentTime, video.paused || video.ended];
         }
     }
 
@@ -65,7 +77,9 @@
     }
 
     for (const event of ['loadedmetadata', 'timeupdate', 'seeked', 'play', 'pause', 'ended']) {
-        document.addEventListener(event, remember, true);
+        document.addEventListener(event, action => {
+            if (action.isTrusted) remember(action.target);
+        }, true);
     }
 
     function forwardSearch(event, dest) {
