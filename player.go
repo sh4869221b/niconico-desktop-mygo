@@ -23,6 +23,7 @@ type playerWindow struct {
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
 	playedWatch            screenRoute
+	playedVideo            string // canonical ID verified by the watch page and its media session
 	playedPosition         *webPlaybackPosition
 	restoring              *webPlaybackRestore
 	restoreToken           uint64
