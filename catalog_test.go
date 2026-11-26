@@ -68,7 +68,7 @@ func TestRouteTargetsAndSavedIdentity(t *testing.T) {
 
 	for _, path := range []string{"search/kitty", "tag/kitty"} {
 		base := home + path
-		input := base + "?sort=v&order=a&page=3&f_range=0#results"
+		input := base + "?sort=v&order=a&page=3#results"
 		r := routeFor(resolve(input, false))
 		if r.kind != screenSearch || r.page != 2 || r.target != input || r.link != base+"?order=a&sort=v" {
 			t.Errorf("search route = %+v", r)
@@ -85,13 +85,34 @@ func TestRouteTargetsAndSavedIdentity(t *testing.T) {
 		}{{0, ""}, {3, "4"}} {
 			next := r.withPage(page.index)
 			u, _ := url.Parse(next.target)
-			if next.page != page.index || next.link != r.link || u.Query().Get("page") != page.query || u.Query().Get("f_range") != "0" || u.Fragment != "results" {
+			if next.page != page.index || next.link != r.link || u.Query().Get("page") != page.query || u.Query().Get("sort") != "v" || u.Fragment != "results" {
 				t.Errorf("changed search page = %+v", next)
 			}
 		}
-		for _, page := range []string{"0", "-1", "x", "4168"} {
-			if r := routeFor(base + "?page=" + page); r.page != 0 || r.target != base+"?page="+page {
-				t.Errorf("unsupported page = %+v", r)
+	}
+}
+
+func TestFilteredSearchRemainsOfficial(t *testing.T) {
+	c := newCatalog(func(string) (*http.Cookie, error) {
+		t.Fatal("official search read a session cookie for the native API")
+		return nil, nil
+	})
+	c.http.Transport = requestFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("official search used the native catalog")
+		return nil, nil
+	})
+	for _, path := range []string{"search/kitty", "tag/kitty"} {
+		for _, query := range []string{"page=3&l_range=1", "f_range=0", "sort=unknown", "order=other", "page=0", "page=-1", "page=x", "page=4168", "page=1&page=3", "sort=f&order=%zz"} {
+			input := home + path + "?" + query
+			r := routeFor(resolve(input, false))
+			if r.kind != screenOfficial || r.target != input {
+				t.Fatalf("search routed away from %q: %+v", input, r)
+			}
+			if _, err := c.load(t.Context(), r); err != nil {
+				t.Fatal(err)
+			}
+			if e, ok := makeEntry(input, "絞り込み"); !ok || e.URL != input || routeFor(e.URL).kind != screenOfficial {
+				t.Errorf("saved official search = %+v, %v", e, ok)
 			}
 		}
 	}
@@ -209,6 +230,40 @@ func TestNativeVideoDescription(t *testing.T) {
 	p, err := c.load(context.Background(), routeFor(home+"watch/sm9"))
 	if err != nil || p.title != "動画" || p.author != "投稿者" || len(p.links) != 4 || p.links[2].link != home+"mylist/52" || p.links[3].link != home+"watch/sm12?from=60" || strings.Contains(p.summary, "ignored") {
 		t.Fatalf("page = %#v err=%v", p, err)
+	}
+}
+
+func TestDescriptionLinksKeepSeparateStartTimes(t *testing.T) {
+	watch := home + "watch/sm9"
+	_, links := plainDescription(`
+		<a href="/watch/sm9?from=60&amp;ref=test">1分</a>
+		<a href="https://nico.ms/sm9?from=60">同じ開始位置</a>
+		https://nico.ms/sm9?from=120。
+		https://www.nicovideo.jp/watch/sm9
+	`)
+	if len(links) != 3 || links[0].link != watch+"?from=60&ref=test" || links[1].link != watch+"?from=120" || links[2].link != watch {
+		t.Fatalf("description links = %+v", links)
+	}
+	if links[0].title == links[1].title {
+		t.Fatal("different start positions have identical labels")
+	}
+	for _, link := range links {
+		if e, ok := makeEntry(link.link, "動画"); !ok || e.URL != watch {
+			t.Errorf("saved watch = %+v, %v", e, ok)
+		}
+	}
+}
+
+func TestVideoDetailsRejectMismatchedID(t *testing.T) {
+	c := newCatalog(nil)
+	c.http.Transport = requestFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/api/getthumbinfo/sm9" || r.Header.Get("Cookie") != "" {
+			t.Fatalf("unexpected metadata request: %s", r.URL)
+		}
+		return testResponse(200, `<nicovideo_thumb_response status="ok"><thumb><video_id>sm12</video_id><title>別の動画</title></thumb></nicovideo_thumb_response>`), nil
+	})
+	if _, err := c.video(t.Context(), routeFor(home+"watch/sm9")); err == nil {
+		t.Fatal("accepted details for another video")
 	}
 }
 

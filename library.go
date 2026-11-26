@@ -28,6 +28,10 @@ func makeEntry(raw, title string) (entry, bool) {
 	if u == "" {
 		return entry{}, false
 	}
+	if (k == "キーワード検索" || k == "タグ検索") && routeFor(raw).kind == screenOfficial {
+		// Preserve the conditions that require the official search page.
+		u = raw
+	}
 	title = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1

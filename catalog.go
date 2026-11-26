@@ -75,12 +75,13 @@ func routeFor(raw string) screenRoute {
 	r.link, r.key = link, parts[len(parts)-1]
 	switch kind {
 	case "タグ検索", "キーワード検索":
-		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
-		r.kind = screenSearch
-		r.key, _ = url.PathUnescape(term)
-		if page, err := strconv.Atoi(input.Query().Get("page")); err == nil && page > 0 && page <= maxCatalogPage+1 {
-			r.page = page - 1
+		page, ok := nativeSearchPage(input)
+		if !ok {
+			return r
 		}
+		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
+		r.kind, r.page = screenSearch, page
+		r.key, _ = url.PathUnescape(term)
 	case "動画":
 		if watchSegment.MatchString(r.key) {
 			r.kind = screenVideo
@@ -101,6 +102,57 @@ func routeFor(raw string) screenRoute {
 		}
 	}
 	return r
+}
+
+// Only route searches whose query can be applied by both search APIs.
+var searchSorts = map[string]struct{ snapshot, account string }{
+	"f": {"startTime", "registeredAt"}, "v": {"viewCounter", "viewCount"},
+	"r": {"lastCommentTime", "lastCommentTime"}, "m": {"mylistCounter", "mylistCount"},
+	"n": {"commentCounter", "commentCount"}, "l": {"lengthSeconds", "duration"},
+}
+
+func nativeSearchPage(u *url.URL) (int, bool) {
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return 0, false
+	}
+	page := 1
+	for key, values := range query {
+		if len(values) != 1 {
+			return 0, false
+		}
+		value := values[0]
+		switch key {
+		case "page":
+			if !numeric(value, len(value)) {
+				return 0, false
+			}
+			page, err = strconv.Atoi(value)
+			if err != nil || page < 1 || page > maxCatalogPage+1 {
+				return 0, false
+			}
+		case "sort":
+			if _, ok := searchSorts[value]; !ok {
+				return 0, false
+			}
+		case "order":
+			if value != "a" && value != "d" {
+				return 0, false
+			}
+		default:
+			return 0, false
+		}
+	}
+	return page - 1, true
+}
+
+func searchSort(u *url.URL) (sort, order string) {
+	q := u.Query()
+	sort = q.Get("sort")
+	if sort == "" {
+		sort = "f"
+	}
+	return sort, q.Get("order")
 }
 
 func (r screenRoute) withPage(page int) screenRoute {
@@ -237,17 +289,14 @@ func searchParameters(r screenRoute) url.Values {
 	if strings.HasPrefix(u.Path, "/tag/") {
 		targets = "tagsExact"
 	}
-	fields := map[string]string{"f": "startTime", "v": "viewCounter", "r": "lastCommentTime", "m": "mylistCounter", "n": "commentCounter", "l": "lengthSeconds"}
-	sort, ok := fields[u.Query().Get("sort")]
+	sort, order := searchSort(u)
 	direction := "-"
-	if !ok {
-		sort = "startTime"
-	} else if u.Query().Get("order") == "a" {
+	if order == "a" {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
 		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter"},
-		"_sort":  {direction + sort}, "_limit": {strconv.Itoa(pageSize)}, "_offset": {strconv.Itoa(r.page * pageSize)},
+		"_sort":  {direction + searchSorts[sort].snapshot}, "_limit": {strconv.Itoa(pageSize)}, "_offset": {strconv.Itoa(r.page * pageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
 
@@ -420,6 +469,7 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 	var result struct {
 		Status string `xml:"status,attr"`
 		Thumb  struct {
+			ID           string `xml:"video_id"`
 			Title        string `xml:"title"`
 			Description  string `xml:"description"`
 			UserID       string `xml:"user_id"`
@@ -428,6 +478,9 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 	}
 	if err := xml.Unmarshal(data, &result); err != nil || result.Status != "ok" || result.Thumb.Title == "" {
 		return p, errors.New("公開されている動画情報を取得できませんでした")
+	}
+	if id := result.Thumb.ID; id != "" && videoID.MatchString(r.key) && !strings.EqualFold(id, r.key) {
+		return p, errors.New("指定した動画と異なる動画情報を受け取りました")
 	}
 	p.title = result.Thumb.Title
 	p.summary, p.links = plainDescription(result.Thumb.Description)
@@ -445,11 +498,21 @@ func plainDescription(value string) (string, []card) {
 	add := func(raw string) {
 		raw = strings.TrimRight(raw, "。．、！？：；,.)]}!?;）】」")
 		link, kind := canonical(raw)
-		if len(links) >= 24 || seen[link] || (kind != "動画" && kind != "マイリスト" && kind != "ユーザー") {
+		if len(links) >= 24 || (kind != "動画" && kind != "マイリスト" && kind != "ユーザー") {
+			return
+		}
+		r := routeFor(raw)
+		if r.kind == screenVideo {
+			u, _ := url.Parse(r.target)
+			if from := u.Query().Get("from"); from != "" {
+				link += "?" + url.Values{"from": {from}}.Encode()
+			}
+		}
+		if seen[link] {
 			return
 		}
 		seen[link] = true
-		links = append(links, card{link: routeFor(raw).target, title: kind + " · " + strings.TrimPrefix(link, home)})
+		links = append(links, card{link: r.target, title: kind + " · " + strings.TrimPrefix(link, home)})
 	}
 	z := html.NewTokenizer(strings.NewReader(value))
 	var ignored string

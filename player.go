@@ -19,6 +19,7 @@ type playerWindow struct {
 	target, title, status  string
 	commentLanguageWarning bool
 	historySuppressed      map[string]bool
+	webVideo               string // the video currently allowed in this WebView
 	document               playerDocument
 }
 
@@ -26,35 +27,96 @@ func (p *playerWindow) resumeHistory(video string) {
 	delete(p.historySuppressed, video)
 }
 
+func (p *playerWindow) visitWebVideo(video string) {
+	if p.webVideo != video {
+		p.resumeHistory(video)
+		p.webVideo = video
+	}
+}
+
+func (p *playerWindow) needsNativePlayer(route screenRoute, mode playbackMode) bool {
+	return mode == nativePlayback && route.kind == screenVideo && route.link != p.webVideo
+}
+
 type playerDocument struct {
 	loaded               bool
+	committed            bool
 	revision             uint64
 	pending              string
 	source, video, title string
-	previousTitle        string
+	lookingUpTitle       bool
 }
 
-func (d *playerDocument) observe(raw, title string) bool {
+func (d *playerDocument) begin(raw string) {
+	d.pending, d.loaded, d.committed = raw, false, false
+	d.revision++
+	d.title = ""
+	d.lookingUpTitle = false
+}
+
+func (d *playerDocument) commit(raw string) {
+	d.begin(raw)
+	d.committed = true
+}
+
+func (d *playerDocument) matchesSource(raw string) bool {
+	if d.pending == "" || samePageURL(d.pending, raw) {
+		return true
+	}
+	// pushState can change the URL of the committed document before its
+	// finish notification. A pending request has no committed document yet.
+	return d.committed && samePageOrigin(d.pending, raw)
+}
+
+func (d *playerDocument) finish(raw string) bool {
+	if d.pending == "" || !d.matchesSource(raw) {
+		return false
+	}
+	d.pending, d.loaded, d.source = "", true, ""
+	return true
+}
+
+func (d *playerDocument) failed(raw, current string) bool {
+	// WebView2 can report the live source URL on a previous load's failure.
+	// There must still be a pending load, and both URLs must match it.
+	return d.pending != "" && samePageURL(d.pending, current) && samePageURL(d.pending, raw)
+}
+
+func samePageOrigin(a, b string) bool {
+	u, v := allowedURL(a), allowedURL(b)
+	return u != nil && v != nil && strings.EqualFold(u.Hostname(), v.Hostname())
+}
+
+func samePageURL(a, b string) bool {
+	if a == b {
+		return a != ""
+	}
+	u, v := allowedURL(a), allowedURL(b)
+	return u != nil && v != nil && strings.EqualFold(u.Hostname(), v.Hostname()) &&
+		u.Path == v.Path && u.RawQuery == v.RawQuery && u.Fragment == v.Fragment
+}
+
+func (d *playerDocument) observe(raw string, route screenRoute) bool {
 	changed := d.source != raw
 	d.source = raw
-	r := routeFor(raw)
 	video := ""
-	if r.kind == screenVideo {
-		video = r.link
+	if route.kind == screenVideo {
+		video = route.link
 	}
 	if d.video != video {
-		if d.title != "" {
-			d.previousTitle = d.title
-		}
 		d.video, d.title = video, ""
-	}
-	// A SPA can update the title and the URL in either order. Keep the first
-	// title for this video, and wait past the previous video's title on a new URL.
-	if title = strings.TrimSpace(title); d.video != "" && d.title == "" && title != "" && title != d.previousTitle {
-		d.title = title
-		changed = true
+		d.lookingUpTitle = false
+		d.revision++
 	}
 	return changed
+}
+
+func (d *playerDocument) acceptTitle(revision uint64, video, title string) bool {
+	if title = strings.TrimSpace(title); !d.loaded || d.revision != revision || video == "" || d.video != video || title == "" || d.title != "" {
+		return false
+	}
+	d.title = title
+	return true
 }
 
 func (b *browser) openPlayer(raw string) { b.openPlayerMode(raw, b.playMode) }
@@ -87,6 +149,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 				p.win.Focus()
 				return
 			}
+			p.visitWebVideo(route.link)
 			p.target = route.target
 			if p.view != nil {
 				p.load(route.target)
@@ -95,7 +158,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			p.win.Focus()
 			return
 		}
-		p := &playerWindow{mode: mode, target: route.target, status: "再生を準備しています…"}
+		p := &playerWindow{mode: mode, target: route.target, webVideo: route.link, status: "再生を準備しています…"}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
@@ -150,11 +213,9 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		case screenOfficial:
 			return false
 		case screenVideo:
-			if b.playMode == nativePlayback && dest.link != routeFor(page.URL()).link {
-				b.openPlayer(dest.target)
-				return true
+			if dest.link == p.webVideo {
+				p.resumeHistory(dest.link)
 			}
-			p.resumeHistory(dest.link)
 			return false
 		}
 		go mygo.RunOnMain(func() {
@@ -167,16 +228,18 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		return true
 	}
 	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
-		if !active() || allowedURL(e.URL) == nil || e.UserInitiated && routeLink(e.URL) {
+		if !active() || allowedURL(e.URL) == nil || b.handoffWatch(p, routeFor(e.URL)) || e.UserInitiated && routeLink(e.URL) {
 			e.PreventDefault()
+			return
 		}
+		p.document.begin(e.URL)
 	})
 	page.SetWindowOpenHandler(func(req mygo.WindowOpenRequest) *mygo.WindowOptions {
 		u := allowedURL(req.URL)
 		if !active() || u == nil || !req.UserInitiated && !strings.EqualFold(u.Hostname(), "account.nicovideo.jp") {
 			return nil
 		}
-		if req.UserInitiated && routeLink(u.String()) {
+		if b.handoffWatch(p, routeFor(u.String())) || req.UserInitiated && routeLink(u.String()) {
 			return nil
 		}
 		go mygo.RunOnMain(func() {
@@ -189,28 +252,23 @@ func (b *browser) attachPlayer(p *playerWindow) {
 	page.OnPageTitleUpdated(func(e *mygo.TitleEvent) {
 		e.PreventDefault()
 	})
-	page.OnDidNavigate(func(_ string) {
-		if active() {
-			p.document = playerDocument{revision: p.document.revision + 1}
-			p.win.SetTitle(appName + " · プレーヤー")
+	page.OnDidNavigate(func(raw string) {
+		if active() && allowedURL(raw) != nil && !b.handoffWatch(p, routeFor(raw)) {
+			p.document.commit(raw)
+			p.setWebTitle()
 		}
 	})
 	page.OnDidFinishLoad(func() {
-		if !active() {
+		if !active() || !p.document.finish(page.URL()) {
 			return
 		}
-		p.document.pending = ""
-		p.document.loaded = allowedURL(page.URL()) != nil
-		if p.document.loaded {
-			p.status = ""
-		}
+		p.status = ""
 		p.win.Invalidate()
 	})
-	page.OnDidFailLoad(func(_ *mygo.LoadError) {
-		if !active() {
+	page.OnDidFailLoad(func(err *mygo.LoadError) {
+		if !active() || !p.document.failed(err.URL, page.URL()) {
 			return
 		}
-		p.document.loaded = false
 		p.status = "動画ページを開けませんでした。"
 		p.win.Invalidate()
 	})
@@ -219,11 +277,21 @@ func (b *browser) attachPlayer(p *playerWindow) {
 			return
 		}
 		p.document.loaded = false
+		p.document.pending = ""
+		p.document.revision++
 		p.status = "プレーヤーが終了しました。ウィンドウを閉じて再度開いてください。"
 		p.win.Invalidate()
 	})
 	p.load(p.target)
 	watchWebSource(active, func() { b.observePlayerPage(p, page, active) })
+}
+
+func (b *browser) handoffWatch(p *playerWindow, route screenRoute) bool {
+	if !p.needsNativePlayer(route, b.playMode) {
+		return false
+	}
+	b.openPlayer(route.target)
+	return true
 }
 
 func watchWebSource(active func() bool, observe func()) {
@@ -247,39 +315,72 @@ func watchWebSource(active func() bool, observe func()) {
 
 func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active func() bool) {
 	d := &p.document
-	if !d.loaded || page.IsLoading() {
-		return
-	}
 	raw := page.URL()
-	replay := d.pending != ""
-	if replay && raw != d.pending || !replay && raw == d.source && (d.title != "" || d.video == "") {
+	if !d.matchesSource(raw) {
 		return
 	}
-	revision := d.revision
-	title := ""
-	if routeFor(raw).kind == screenVideo {
-		// Sample URL and title in one renderer call. Eval can pump the UI loop,
-		// so validate the load and source again before using its result.
-		ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
-		value, err := page.EvalContext(ctx, `[location.href, document.title.slice(0, 1024)]`)
-		cancel()
-		if pair, ok := value.([]any); err == nil && ok && len(pair) == 2 && pair[0] == raw {
-			title, _ = pair[1].(string)
+	route := routeFor(raw)
+	if b.handoffWatch(p, route) || !d.loaded || page.IsLoading() {
+		return
+	}
+	if d.observe(raw, route) {
+		if d.video != "" {
+			p.visitWebVideo(d.video)
+			b.recordVideo(p, d.video, d.title)
+		}
+		p.setWebTitle()
+	}
+	if d.video == "" || d.title != "" {
+		return
+	}
+
+	revision, video := d.revision, d.video
+	applyTitle := func(title string) {
+		if active() && routeFor(page.URL()).link == video && !page.IsLoading() && d.acceptTitle(revision, video, title) {
+			b.recordVideo(p, video, d.title)
+			p.setWebTitle()
 		}
 	}
-	if !active() || !d.loaded || revision != d.revision || page.IsLoading() || page.URL() != raw {
+	// Read the ID and title from the same watch response. The document title
+	// and URL can change independently during a same-document navigation.
+	ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
+	value, err := page.EvalContext(ctx, `(() => {
+		try {
+			const data = JSON.parse(document.querySelector('meta[name="server-response"]').content);
+			const video = data.data.response.$watchV4.data.video;
+			return [location.href, video.id, video.title.slice(0, 1024)];
+		} catch { return null; }
+	})()`)
+	cancel()
+	if err == nil {
+		applyTitle(watchResponseTitle(value, raw, route.key))
+	}
+	if !active() || d.revision != revision || routeFor(page.URL()).link != video || d.title != "" || d.lookingUpTitle {
 		return
 	}
-	d.pending = ""
-	if !d.observe(raw, title) && !replay {
-		return
+	// The server response in the DOM may still belong to the first document.
+	// Look up metadata for this video ID without using the WebView's cookies.
+	d.lookingUpTitle = true
+	go func() {
+		result, err := b.catalog.video(context.Background(), route)
+		if err == nil {
+			mygo.RunOnMain(func() { applyTitle(result.title) })
+		}
+	}()
+}
+
+func watchResponseTitle(value any, raw, videoID string) string {
+	if pair, ok := value.([]any); ok && len(pair) == 3 && pair[0] == raw && pair[1] == videoID {
+		title, _ := pair[2].(string)
+		return title
 	}
-	if d.video != "" {
-		b.recordVideo(p, d.video, d.title)
-	}
+	return ""
+}
+
+func (p *playerWindow) setWebTitle() {
 	windowTitle := appName + " · プレーヤー"
-	if d.title != "" {
-		windowTitle = d.title + " · " + appName
+	if p.document.title != "" {
+		windowTitle = p.document.title + " · " + appName
 	}
 	p.win.SetTitle(windowTitle)
 }
@@ -289,9 +390,14 @@ func (p *playerWindow) load(target string) {
 		return
 	}
 	p.target, p.status = target, ""
-	p.document.pending = target
-	p.document.revision++
-	if err := p.view.Page().LoadURL(target); err != nil {
+	page := p.view.Page()
+	current := page.URL()
+	currentBase, _, _ := strings.Cut(current, "#")
+	targetBase, _, _ := strings.Cut(target, "#")
+	if !p.document.loaded || current == target || !samePageURL(currentBase, targetBase) {
+		p.document.begin(target)
+	}
+	if err := page.LoadURL(target); err != nil {
 		p.document.pending = ""
 		p.status = "動画ページを開けませんでした。"
 	}

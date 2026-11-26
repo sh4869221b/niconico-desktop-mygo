@@ -16,19 +16,13 @@ func accountSearchParameters(r screenRoute) url.Values {
 	if strings.HasPrefix(u.Path, "/tag/") {
 		key = "tag"
 	}
-	modes := map[string]string{
-		"f": "registeredAt", "v": "viewCount", "r": "lastCommentTime",
-		"m": "mylistCount", "n": "commentCount", "l": "duration",
-	}
-	sortKey, explicit := modes[u.Query().Get("sort")]
+	sort, requestedOrder := searchSort(u)
 	order := "desc"
-	if !explicit {
-		sortKey = "registeredAt"
-	} else if u.Query().Get("order") == "a" {
+	if requestedOrder == "a" {
 		order = "asc"
 	}
 	return url.Values{key: {r.key}, "pageSize": {strconv.Itoa(pageSize)},
-		"page": {strconv.Itoa(r.page + 1)}, "sortKey": {sortKey}, "sortOrder": {order}}
+		"page": {strconv.Itoa(r.page + 1)}, "sortKey": {searchSorts[sort].account}, "sortOrder": {order}}
 }
 
 func (c catalog) accountSearch(ctx context.Context, r screenRoute) (catalogPage, error) {
