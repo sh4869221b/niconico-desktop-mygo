@@ -303,6 +303,27 @@ func (n *webViewNative) SetContentRules(lists []any) { n.web.SetContentRules(lis
 func (n *webViewNative) CallAsyncFunction(body string, cb func(string, error)) {
 	n.web.CallAsyncFunction(body, cb)
 }
+
+type asyncPageFunction interface {
+	CallAsyncFunction(string, func(string, error))
+}
+
+func callPageFunction(page asyncPageFunction, userGesture bool, body string, cb func(string, error)) {
+	if userGesture {
+		if native, ok := page.(interface {
+			CallAsyncUserGestureFunction(string, func(string, error))
+		}); ok {
+			native.CallAsyncUserGestureFunction(body, cb)
+			return
+		}
+	}
+	page.CallAsyncFunction(body, cb)
+}
+
+func (n *webViewNative) CallAsyncUserGestureFunction(body string, cb func(string, error)) {
+	callPageFunction(n.web, true, body, cb)
+}
+
 func (n *webViewNative) SetZoom(factor float64) { n.web.SetZoom(factor) }
 func (n *webViewNative) Zoom() float64          { return n.web.Zoom() }
 func (n *webViewNative) SetUserAgent(ua string) { n.web.SetUserAgent(ua) }

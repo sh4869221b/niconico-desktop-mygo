@@ -20,6 +20,7 @@ import (
 const apiHost = "nvapi.nicovideo.jp"
 const pageSize = 24
 const userVideoPageSize = 100
+const publicMylistPageSize = 100
 const maxCatalogPage = 4166 // zero based, within the snapshot API's 100,000 results
 const responseLimit = 4 << 20
 
@@ -106,7 +107,12 @@ func routeFor(raw string) screenRoute {
 		if len(parts) == 3 && parts[0] == "user" && numeric(parts[1], 9) {
 			r.kind, r.key = screenUserLists, parts[1]
 		} else if goNicoListURL(link) != "" && numeric(r.key, 12) {
-			r.kind = screenList
+			page, ok := desktopListPage(input)
+			if !ok {
+				r.officialBrowse = true
+				return r
+			}
+			r.kind, r.page = screenList, page
 		}
 	}
 	return r
@@ -118,12 +124,19 @@ func pageIndex(value string) (int, bool) {
 }
 
 func nativeUserVideoPage(u *url.URL) (int, bool) {
+	if u.RawQuery != "" && !strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/video") {
+		return 0, false
+	}
+	return desktopListPage(u)
+}
+
+func desktopListPage(u *url.URL) (int, bool) {
 	if u.RawQuery == "" {
 		return 0, true
 	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil || len(query) != 1 || len(query["page"]) != 1 ||
-		!strings.EqualFold(u.Hostname(), "www.nicovideo.jp") || !strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/video") {
+		!strings.EqualFold(u.Hostname(), "www.nicovideo.jp") {
 		return 0, false
 	}
 	return pageIndex(query.Get("page"))
@@ -179,10 +192,12 @@ func searchSort(u *url.URL) (sort, order string) {
 
 func (r screenRoute) withPage(page int) screenRoute {
 	r.page = page
-	if r.kind == screenSearch || r.kind == screenUser {
+	if r.kind == screenSearch || r.kind == screenUser || r.kind == screenList {
 		u, _ := url.Parse(r.target)
-		if r.kind == screenUser {
+		if r.kind == screenUser || r.kind == screenList {
 			u.Host = "www.nicovideo.jp"
+		}
+		if r.kind == screenUser {
 			u.Path, u.RawPath = "/user/"+r.key+"/video", ""
 		}
 		query := u.Query()
@@ -394,18 +409,27 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		path, title = "/v2/mylists/"+r.key, "マイリスト"
 	}
 	p := catalogPage{title: title}
+	limit := pageSize
+	switch r.kind {
+	case screenUser:
+		limit = userVideoPageSize
+	case screenList:
+		limit = publicMylistPageSize
+	}
 	query := url.Values{
-		"page": {strconv.Itoa(r.page + 1)}, "pageSize": {strconv.Itoa(pageSize)},
+		"page": {strconv.Itoa(r.page + 1)}, "pageSize": {strconv.Itoa(limit)},
 	}
 	if r.kind == screenUser {
 		// Match the desktop posting list's default page size and ordering.
-		query.Set("pageSize", strconv.Itoa(userVideoPageSize))
 		query.Set("q", "")
 		query.Set("sortKey", "registeredAt")
 		query.Set("sortOrder", "desc")
 		query.Set("_language", "ja-jp")
 		query.Set("sensitiveContents", "mask")
 		query.Set("selectContentType", "long")
+	} else if r.kind == screenList {
+		// Omitting sortKey and sortOrder uses the list owner's default, as in the official page.
+		query.Set("sensitiveContents", "mask")
 	}
 	data, err := c.request(ctx, apiHost, path, query, private)
 	if err != nil {
@@ -442,7 +466,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		if result.Data.Mylists == nil {
 			return p, errors.New("マイリスト一覧の応答形式が変わっています")
 		}
-		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, pageSize)
+		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, limit)
 		for _, list := range result.Data.Mylists {
 			id := strconv.FormatInt(list.ID, 10)
 			if !numeric(id, 12) || !private && !list.IsPublic {
@@ -462,13 +486,13 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 	}
 	rows := result.Data.Items
 	if r.kind == screenUser {
-		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, userVideoPageSize)
+		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, limit)
 	} else if m := result.Data.Mylist; m != nil {
 		if m.Name != "" {
 			p.title = m.Name
 		}
 		p.summary, p.links = plainDescription(m.Description)
-		p.more, rows = hasMore(m.HasNext, r.page, m.TotalItemCount, pageSize), m.Items
+		p.more, rows = hasMore(m.HasNext, r.page, m.TotalItemCount, limit), m.Items
 	} else {
 		return p, errors.New("マイリストの応答形式が変わっています")
 	}

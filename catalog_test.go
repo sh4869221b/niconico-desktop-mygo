@@ -158,6 +158,38 @@ func TestUserVideoPagesMatchTheOfficialPostingList(t *testing.T) {
 	}
 }
 
+func TestPublicMylistKeepsOfficialSortAndPageBoundaries(t *testing.T) {
+	const base = home + "mylist/7473771"
+	const sorted = base + "?page=2&sortKey=addedAt&sortOrder=asc"
+	for _, target := range []string{sorted, home + "user/219575/mylist/7473771?page=2&sortKey=addedAt&sortOrder=asc"} {
+		route := routeFor(target)
+		if route.kind != screenOfficial || !route.browsesInMain() || route.target != target {
+			t.Fatalf("sorted list conditions did not reach the official view: %+v", route)
+		}
+		if pin, ok := makeEntry(target, "マイリスト"); !ok || pin.URL != target {
+			t.Fatalf("saved list conditions = %+v", pin)
+		}
+	}
+	for _, base := range []string{base, home + "user/219575/mylist/7473771"} {
+		next := routeFor(base).withPage(1)
+		if next.target != base+"?page=2" || routeFor(next.target).page != 1 || routeFor(next.target).kind != screenList {
+			t.Fatalf("official target after Next = %+v", next)
+		}
+		c := newCatalog(nil)
+		c.http.Transport = requestFunc(func(r *http.Request) (*http.Response, error) {
+			q := r.URL.Query()
+			if r.URL.Path != "/v2/mylists/7473771" || q.Get("page") != "2" || q.Get("pageSize") != "100" ||
+				q.Get("sensitiveContents") != "mask" || q.Has("sortKey") || q.Has("sortOrder") {
+				t.Fatalf("default list request disagrees with official browser: %s", r.URL)
+			}
+			return testResponse(http.StatusOK, `{"meta":{"status":200},"data":{"mylist":{"name":"一覧","totalItemCount":156,"items":[]}}}`), nil
+		})
+		if page, err := c.load(t.Context(), next); err != nil || page.more {
+			t.Fatalf("after the last 56 items: %+v, %v", page, err)
+		}
+	}
+}
+
 func TestNativeCatalog(t *testing.T) {
 	tests := []struct {
 		route, path, response, title, first string

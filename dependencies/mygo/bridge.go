@@ -166,7 +166,7 @@ var evalCanceled func()
 
 // eval returns the JSON result of code, which shares the memory of the
 // page's answer.
-func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) {
+func (w *Window) eval(ctx context.Context, code string, userGesture bool) (jsontext.Value, error) {
 	if w.content {
 		return nil, errNoPage
 	}
@@ -198,7 +198,7 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 		// The page of a closed window never answers.
 		off = w.onClosed.add(func() { deliver(ch, result{err: errDestroyed}) }, false)
 		expr := strings.TrimRight(code, " \t\r\n;")
-		n.CallAsyncFunction(fmt.Sprintf(evalExpr, expr), func(res string, err error) {
+		callPageFunction(n, userGesture, fmt.Sprintf(evalExpr, expr), func(res string, err error) {
 			if err == nil {
 				deliver(ch, result{raw: res})
 				return
@@ -216,7 +216,7 @@ func (w *Window) eval(ctx context.Context, code string) (jsontext.Value, error) 
 					deliver(ch, result{err: errDestroyed})
 					return
 				}
-				w.native.CallAsyncFunction(fmt.Sprintf(evalBody, code), func(res string, err error) {
+				callPageFunction(w.native, userGesture, fmt.Sprintf(evalBody, code), func(res string, err error) {
 					deliver(ch, result{raw: res, err: err})
 				})
 			})

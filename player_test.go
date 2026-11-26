@@ -72,7 +72,7 @@ func TestPlayerResumesObservingAfterPrecommitFailure(t *testing.T) {
 		t.Fatal("lost same-document navigation after the failed load")
 	}
 	d.begin()
-	d.commit()
+	d.commit(next)
 	d.stopLoad()
 	if d.loading || d.loaded {
 		t.Fatal("a committed error page was treated as playable")
@@ -84,7 +84,7 @@ func TestFilteredSearchInPlayerUsesTheMainWindow(t *testing.T) {
 		dest := routeFor(target)
 		// Standard links, popup requests and observed page changes use this route
 		// to dispatch browse destinations out of the playback window.
-		if !dest.browsesInMain() || dest.kind != screenOfficial || dest.target != target {
+		if !dest.browsesInMain() || !dest.isSearchPage() || dest.kind != screenOfficial || dest.target != target {
 			t.Fatalf("player did not route the complete search URL to the official main view: %+v", dest)
 		}
 	}
@@ -159,7 +159,7 @@ func TestPlayerTitleLookupLimitAndStaleCompletion(t *testing.T) {
 		t.Fatal("a new navigation did not reset the lookup budget")
 	}
 	d.begin() // reload the same video while the old request is still in flight
-	d.commit()
+	d.commit(route.target)
 	d.finish(route.target)
 	if oldCtx.Err() == nil {
 		t.Fatal("old request was not canceled")

@@ -867,10 +867,19 @@ func (w *window) Eval(js string) {
 // CallAsyncFunction evaluates through the DevTools protocol, which awaits
 // promises, reports syntax errors and ignores the page's CSP.
 func (w *window) CallAsyncFunction(body string, cb func(string, error)) {
+	w.callAsyncFunction(body, false, cb)
+}
+
+func (w *window) CallAsyncUserGestureFunction(body string, cb func(string, error)) {
+	w.callAsyncFunction(body, true, cb)
+}
+
+func (w *window) callAsyncFunction(body string, userGesture bool, cb func(string, error)) {
 	params, _ := json.Marshal(map[string]any{
 		"expression":    "(async () => {\n" + body + "\n})()",
 		"awaitPromise":  true,
 		"returnByValue": true,
+		"userGesture":   userGesture,
 	})
 	w.withWebViewOr(func() {
 		w.devtools("Runtime.evaluate", string(params), func(result string, err error) {

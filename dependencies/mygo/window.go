@@ -1853,7 +1853,17 @@ func (p *Page) Eval(code string) (any, error) {
 
 // EvalContext is Eval with a context that can abort the wait.
 func (p *Page) EvalContext(ctx context.Context, code string) (any, error) {
-	raw, err := p.w.eval(ctx, code)
+	return p.evalContext(ctx, code, false)
+}
+
+// EvalUserGestureContext evaluates code on behalf of a user action. On
+// Windows only, the evaluation carries a transient browser user gesture.
+func (p *Page) EvalUserGestureContext(ctx context.Context, code string) (any, error) {
+	return p.evalContext(ctx, code, true)
+}
+
+func (p *Page) evalContext(ctx context.Context, code string, userGesture bool) (any, error) {
+	raw, err := p.w.eval(ctx, code, userGesture)
 	if err != nil || len(raw) == 0 {
 		return nil, err
 	}
@@ -1875,7 +1885,7 @@ func EvalAs[T any](p *Page, code string) (T, error) {
 	if p == nil {
 		return v, errNoPage
 	}
-	raw, err := p.w.eval(context.Background(), code)
+	raw, err := p.w.eval(context.Background(), code, false)
 	if err != nil || len(raw) == 0 {
 		return v, err
 	}

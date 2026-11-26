@@ -22,6 +22,10 @@ type playerWindow struct {
 	historySuppressed      map[string]bool
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
+	playedWatch            screenRoute
+	playedPosition         *webPlaybackPosition
+	restoring              *webPlaybackRestore
+	restoreToken           uint64
 	document               playerDocument
 }
 
@@ -44,6 +48,7 @@ type playerDocument struct {
 	loading              bool
 	loaded               bool
 	revision             uint64
+	committedURL         string
 	source, video, title string
 	titleAttempts        int
 	titleRetryAt         time.Time
@@ -52,24 +57,28 @@ type playerDocument struct {
 
 func (d *playerDocument) begin() {
 	d.loading = true
+	d.committedURL = ""
 	d.resetTitleLookup()
 }
 
-func (d *playerDocument) commit() {
+func (d *playerDocument) commit(raw string) {
 	if !d.loading {
 		d.begin()
 	}
+	d.committedURL = raw
 	d.loaded = false
 	d.title = ""
 }
 
 func (d *playerDocument) finish(raw string) {
 	d.loading, d.loaded, d.source = false, allowedURL(raw) != nil, ""
+	d.committedURL = ""
 }
 
 func (d *playerDocument) stopLoad() {
 	// A failure before commit can leave the previously loaded page in place.
 	d.loading = false
+	d.committedURL = ""
 }
 
 func (d *playerDocument) resetTitleLookup() {
@@ -159,6 +168,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 				return
 			}
 			p.visitWebVideo(route.link)
+			p.restoring = nil
 			p.target = route.target
 			if p.view != nil {
 				p.load(route.target)
@@ -202,7 +212,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		return
 	}
 	view, err := p.win.NewWebView(mygo.WebViewOptions{Page: mygo.PageOptions{
-		Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session,
+		Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session, PreloadScript: webPlayerPreload,
 	}})
 	if !active() {
 		if view != nil {
@@ -225,7 +235,8 @@ func (b *browser) attachPlayer(p *playerWindow) {
 	}
 	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
 		dest := routeFor(e.URL)
-		if !active() || allowedURL(e.URL) == nil || b.handoffWatch(p, dest) || e.UserInitiated && routeLink(dest) {
+		if !active() || allowedURL(e.URL) == nil || b.handoffWatch(p, dest) ||
+			(e.UserInitiated || dest.isSearchPage()) && routeLink(dest) {
 			e.PreventDefault()
 		}
 	})
@@ -248,8 +259,11 @@ func (b *browser) attachPlayer(p *playerWindow) {
 	page.OnPageTitleUpdated(func(e *mygo.TitleEvent) {
 		e.PreventDefault()
 	})
-	page.OnDidStartLoad(func(_ string) {
+	page.OnDidStartLoad(func(raw string) {
 		if active() {
+			if p.restoring != nil && routeFor(raw).target != p.restoring.target {
+				p.restoring = nil
+			}
 			p.document.begin()
 			p.status = ""
 			p.win.Invalidate()
@@ -259,7 +273,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		if !active() {
 			return
 		}
-		p.document.commit()
+		p.document.commit(raw)
 		dest := routeFor(raw)
 		if !b.handoffWatch(p, dest) && !b.browseFromPlayer(p, dest, true) {
 			p.setWebTitle()
@@ -269,7 +283,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		if !active() {
 			return
 		}
-		p.document.finish(page.URL())
+		p.finishWebLoad(page.URL())
 		p.status = ""
 		p.win.Invalidate()
 	})
@@ -278,12 +292,14 @@ func (b *browser) attachPlayer(p *playerWindow) {
 			return
 		}
 		p.document.stopLoad()
+		p.restoring = nil
 		p.status = "動画ページを開けませんでした。"
 		p.win.Invalidate()
 	})
 	page.OnDidCancelLoad(func() {
 		if active() {
 			p.document.stopLoad()
+			p.restoring = nil
 		}
 	})
 	page.OnRenderProcessGone(func(_ string) {
@@ -292,6 +308,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		}
 		p.document.loaded = false
 		p.document.stopLoad()
+		p.restoring = nil
 		p.document.resetTitleLookup()
 		p.status = "プレーヤーが終了しました。ウィンドウを閉じて再度開いてください。"
 		p.win.Invalidate()
@@ -302,6 +319,11 @@ func (b *browser) attachPlayer(p *playerWindow) {
 
 func (r screenRoute) browsesInMain() bool {
 	return r.officialBrowse || r.kind != screenVideo && r.kind != screenOfficial
+}
+
+func (r screenRoute) isSearchPage() bool {
+	return r.kind == screenSearch || r.officialBrowse &&
+		(strings.HasPrefix(r.link, home+"search/") || strings.HasPrefix(r.link, home+"tag/"))
 }
 
 func (b *browser) browseFromPlayer(p *playerWindow, dest screenRoute, alreadyNavigated bool) bool {
@@ -317,17 +339,22 @@ func (b *browser) browseFromPlayer(p *playerWindow, dest screenRoute, alreadyNav
 	revision := p.document.revision
 	go mygo.RunOnMain(func() {
 		if alreadyNavigated {
-			p.returningToVideo = false
+			defer func() { p.returningToVideo = false }()
 		}
 		if b.closed || b.player != p || p.view == nil {
 			return
 		}
 		if alreadyNavigated {
-			if p.document.revision != revision || p.view.Page().URL() != dest.target {
+			page := p.view.Page()
+			if p.document.revision != revision || page.URL() != dest.target {
 				return
 			}
 			// A history or same-document navigation may have already left the video.
-			p.load(p.target)
+			p.captureWebPosition(page)
+			if b.closed || b.player != p || p.view == nil || p.document.revision != revision || page.URL() != dest.target {
+				return
+			}
+			p.returnToPlayedWatch()
 		}
 		b.navigate(dest.target)
 		b.win.Show()
@@ -376,10 +403,17 @@ func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active fun
 	if d.observe(raw, route) {
 		if d.video != "" {
 			p.visitWebVideo(d.video)
-			p.target = route.target
+			p.notePlayedWatch(route, false)
 			b.recordVideo(p, d.video, d.title)
 		}
 		p.setWebTitle()
+	}
+	if route.kind == screenVideo {
+		p.applyWebRestore(page, route)
+		p.captureWebPosition(page)
+		if !active() || d.loading || page.URL() != raw {
+			return
+		}
 	}
 	if d.video == "" || d.title != "" {
 		return
@@ -447,6 +481,7 @@ func (p *playerWindow) load(target string) {
 	}
 	p.status = ""
 	if err := p.view.Page().LoadURL(target); err != nil {
+		p.restoring = nil
 		p.status = "動画ページを開けませんでした。"
 	}
 	p.win.Invalidate()
