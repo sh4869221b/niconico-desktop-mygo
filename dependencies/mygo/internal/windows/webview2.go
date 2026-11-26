@@ -83,10 +83,14 @@ const (
 	// Event arguments and helpers.
 	navStartingGetURI             = 3
 	navStartingGetIsUserInitiated = 4
+	navStartingGetIsRedirected    = 5
 	navStartingPutCancel          = 8
+	navStartingGetNavigationID    = 9
 	navStarting3GetNavigationKind = 12
+	contentLoadingGetNavigationID = 4
 	navCompletedGetIsSuccess      = 3
 	navCompletedGetWebErrorStatus = 4
+	navCompletedGetNavigationID   = 5
 	msgTryGetWebMessageAsString   = 5
 	msg2GetAdditionalObjects      = 6
 	objectsGetCount               = 3

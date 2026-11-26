@@ -1,8 +1,10 @@
 package main
 
 import (
+	"net/http"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -56,33 +58,119 @@ func TestPlayerHistoryAcrossSameDocumentNavigation(t *testing.T) {
 	}
 }
 
-func TestPlayerLoadFailureBelongsToPendingNavigation(t *testing.T) {
-	a, b := home+"watch/sm9", home+"watch/sm12"
-	var d playerDocument
-	d.begin(a)
-	d.begin(b)
-	if d.finish(a) || d.failed(a, a) {
-		t.Fatal("a previous request was accepted before the new document committed")
+func TestPlayerResumesObservingAfterPrecommitFailure(t *testing.T) {
+	a, next := home+"watch/sm9", home+"watch/sm12"
+	d := playerDocument{loaded: true}
+	d.observe(a, routeFor(a))
+	d.begin()
+	d.stopLoad() // the correlated failure arrived without a new document commit
+	if d.loading || !d.loaded || d.source != a {
+		t.Fatal("the previous document did not remain observable after a failed load")
 	}
-	d.commit(b)
-	if d.failed(a, b) || !d.finish(b) {
-		t.Fatal("the current document did not finish cleanly")
+	d.observe(next, routeFor(next))
+	if d.video != next {
+		t.Fatal("lost same-document navigation after the failed load")
 	}
-	if d.failed(a, b) || d.failed(b, b) || !d.loaded {
-		t.Fatal("a delayed failure invalidated the completed load")
+	d.begin()
+	d.commit()
+	d.stopLoad()
+	if d.loading || d.loaded {
+		t.Fatal("a committed error page was treated as playable")
 	}
-	d.observe(a, routeFor(a)) // same-document movement remains trackable
-	if d.video != a {
-		t.Fatal("same-document navigation was lost")
+}
+
+func TestFilteredSearchInPlayerUsesTheMainWindow(t *testing.T) {
+	for _, target := range []string{home + "tag/test?l_range=1", home + "search/test?page=3&l_range=1"} {
+		dest := routeFor(target)
+		// Standard links, popup requests and observed page changes use this route
+		// to dispatch browse destinations out of the playback window.
+		if !dest.browsesInMain() || dest.kind != screenOfficial || dest.target != target {
+			t.Fatalf("player did not route the complete search URL to the official main view: %+v", dest)
+		}
 	}
-	d.begin(b)
-	d.commit(b)
-	if !d.failed(b, b) || d.loaded {
-		t.Fatal("failed to detect a genuine error on a pending load")
+	for _, target := range []string{home + "watch/sm9?from=60", login} {
+		if routeFor(target).browsesInMain() {
+			t.Errorf("sent playback or sign-in to the main window: %q", target)
+		}
 	}
-	if !d.finish(a) {
-		t.Fatal("did not accept a finish after pushState changed the committed document's URL")
+}
+
+func TestPlayerTitleLookupRetriesAfter503(t *testing.T) {
+	route := routeFor(home + "watch/sm9")
+	d := playerDocument{loaded: true}
+	d.observe(route.target, route)
+	now := time.Unix(100, 0)
+	c := newCatalog(nil)
+	requests := 0
+	c.http.Transport = requestFunc(func(r *http.Request) (*http.Response, error) {
+		requests++
+		if r.URL.Path != "/api/getthumbinfo/sm9" || r.Header.Get("Cookie") != "" {
+			t.Fatalf("unexpected lookup: %s", r.URL)
+		}
+		if requests == 1 {
+			return testResponse(http.StatusServiceUnavailable, ""), nil
+		}
+		return testResponse(http.StatusOK, `<nicovideo_thumb_response status="ok"><thumb><video_id>sm9</video_id><title>回復したタイトル</title></thumb></nicovideo_thumb_response>`), nil
+	})
+	for attempt := range 2 {
+		ctx, ok := d.startTitleLookup(now)
+		if !ok {
+			t.Fatalf("lookup %d did not start", attempt+1)
+		}
+		if _, allowed := d.startTitleLookup(now); allowed {
+			t.Fatal("started a concurrent lookup")
+		}
+		result, err := c.video(ctx, route)
+		if !d.finishTitleLookup(d.revision, route.link, now) || (err != nil) != (attempt == 0) {
+			t.Fatalf("unexpected lookup result %v", err)
+		}
+		if err == nil && !d.acceptTitle(d.revision, route.link, result.title) {
+			t.Fatal("did not accept the recovered title")
+		}
+		if _, allowed := d.startTitleLookup(now.Add(500 * time.Millisecond)); allowed {
+			t.Fatal("started a lookup within the retry delay")
+		}
+		now = now.Add(time.Second)
 	}
+	if d.title != "回復したタイトル" || requests != 2 {
+		t.Fatalf("title %q, requests %d", d.title, requests)
+	}
+}
+
+func TestPlayerTitleLookupLimitAndStaleCompletion(t *testing.T) {
+	route := routeFor(home + "watch/sm9")
+	d := playerDocument{loaded: true}
+	d.observe(route.target, route)
+	now := time.Unix(100, 0)
+	for attempt := range maxTitleLookups {
+		if _, ok := d.startTitleLookup(now); !ok || !d.finishTitleLookup(d.revision, route.link, now) {
+			t.Fatalf("lookup %d failed to settle", attempt+1)
+		}
+		now = now.Add(time.Duration(attempt+1) * time.Second)
+	}
+	if _, ok := d.startTitleLookup(now); ok {
+		t.Fatal("exceeded the lookup cap for this video visit")
+	}
+	d.begin()
+	d.finish(route.target)
+	oldRevision := d.revision
+	oldCtx, ok := d.startTitleLookup(now)
+	if !ok {
+		t.Fatal("a new navigation did not reset the lookup budget")
+	}
+	d.begin() // reload the same video while the old request is still in flight
+	d.commit()
+	d.finish(route.target)
+	if oldCtx.Err() == nil {
+		t.Fatal("old request was not canceled")
+	}
+	if _, ok := d.startTitleLookup(now); !ok {
+		t.Fatal("new request did not start")
+	}
+	if d.finishTitleLookup(oldRevision, route.link, now) || d.acceptTitle(oldRevision, route.link, "古いタイトル") || d.cancelTitleLookup == nil {
+		t.Fatal("an old result interfered with lookup for the new visit")
+	}
+	d.stopTitleLookup()
 }
 
 func TestWebFallbackAppliesToOneVideo(t *testing.T) {

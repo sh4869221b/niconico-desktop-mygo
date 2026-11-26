@@ -49,7 +49,7 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute) (catalogPage,
 		return p, errors.New("ログイン検索の結果を取得できませんでした")
 	}
 	p.searchMode = "ログイン検索"
-	p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount)
+	p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, pageSize)
 	for _, v := range result.Data.Items {
 		if item, ok := v.card(); ok {
 			p.items = append(p.items, item)

@@ -243,7 +243,7 @@ func (w *window) setUp(controller uintptr) {
 		withHandler(fn, func(h uintptr) uintptr { return comCall(w.webview, index, h, uintptr(unsafe.Pointer(&tok))) })
 	}
 	add(wvAddNavigationStarting, w.navigationStarting)
-	add(wvAddContentLoading, func(_, _ uintptr) { w.h.NavigationCommitted(w.URL()) })
+	add(wvAddContentLoading, w.contentLoading)
 	add(wvAddNavigationCompleted, w.navigationCompleted)
 	add(wvAddDocumentTitleChanged, func(_, _ uintptr) {
 		var p uintptr
@@ -386,6 +386,17 @@ func (w *window) focusWebView() {
 }
 
 func (w *window) navigationStarting(_, args uintptr) {
+	id, ok := navigationID(args, navStartingGetNavigationID)
+	if !ok {
+		comCall(args, navStartingPutCancel, 1)
+		return
+	}
+	var redirected int32
+	comCall(args, navStartingGetIsRedirected, uintptr(unsafe.Pointer(&redirected)))
+	if redirected != 0 && !w.isCurrentNavigation(id) {
+		comCall(args, navStartingPutCancel, 1)
+		return
+	}
 	var p uintptr
 	comCall(args, navStartingGetURI, uintptr(unsafe.Pointer(&p)))
 	uri := w.appURL(takeWstr(p))
@@ -408,9 +419,32 @@ func (w *window) navigationStarting(_, args uintptr) {
 	} else {
 		clear(w.htmlFor)
 	}
-	w.loading = true
+	newLoad := !w.isCurrentNavigation(id)
+	w.loading, w.navigationID = true, id
 	w.navigating = uri
-	w.h.NavigationStarted(uri)
+	if newLoad {
+		w.h.NavigationStarted(uri)
+	}
+}
+
+func navigationID(args uintptr, getter int) (uint64, bool) {
+	var id uint64
+	hr := comCall(args, getter, uintptr(unsafe.Pointer(&id)))
+	if failed(hr) {
+		log.Print(hresultError("reading the WebView2 navigation ID", hr))
+		return 0, false
+	}
+	return id, true
+}
+
+func (w *window) isCurrentNavigation(id uint64) bool {
+	return w.loading && w.navigationID == id
+}
+
+func (w *window) contentLoading(_, args uintptr) {
+	if id, ok := navigationID(args, contentLoadingGetNavigationID); ok && w.isCurrentNavigation(id) {
+		w.h.NavigationCommitted(w.URL())
+	}
 }
 
 // COREWEBVIEW2_NAVIGATION_KIND
@@ -434,6 +468,9 @@ func navigationKind(args uintptr) int32 {
 }
 
 func (w *window) navigationCompleted(_, args uintptr) {
+	if id, ok := navigationID(args, navCompletedGetNavigationID); !ok || !w.isCurrentNavigation(id) {
+		return
+	}
 	w.loading = false
 	var ok int32
 	comCall(args, navCompletedGetIsSuccess, uintptr(unsafe.Pointer(&ok)))
@@ -452,9 +489,12 @@ func (w *window) navigationCompleted(_, args uintptr) {
 	var status int32
 	comCall(args, navCompletedGetWebErrorStatus, uintptr(unsafe.Pointer(&status)))
 	if status == 14 { // COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED: another navigation
+		if h, ok := w.h.(interface{ NavigationCanceled() }); ok {
+			h.NavigationCanceled()
+		}
 		return
 	}
-	w.h.LoadFailed(w.URL(), int(status), "navigation failed (COREWEBVIEW2_WEB_ERROR_STATUS "+strconv.Itoa(int(status))+")")
+	w.h.LoadFailed(w.navigating, int(status), "navigation failed (COREWEBVIEW2_WEB_ERROR_STATUS "+strconv.Itoa(int(status))+")")
 }
 
 // downloadStarting asks where to save a download, instead of WebView2's own

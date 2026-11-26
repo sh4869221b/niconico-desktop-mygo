@@ -19,6 +19,7 @@ import (
 
 const apiHost = "nvapi.nicovideo.jp"
 const pageSize = 24
+const userVideoPageSize = 100
 const maxCatalogPage = 4166 // zero based, within the snapshot API's 100,000 results
 const responseLimit = 4 << 20
 
@@ -41,11 +42,12 @@ const (
 )
 
 type screenRoute struct {
-	kind   screenKind
-	link   string // canonical link used for identity and API parameters
-	target string // URL opened by the player or the official page button
-	key    string
-	page   int // zero based
+	kind           screenKind
+	link           string // canonical link used for identity and API parameters
+	target         string // URL opened by the player or the official page button
+	key            string
+	page           int  // zero based
+	officialBrowse bool // recognized browse page whose conditions require the official UI
 }
 
 func routeFor(raw string) screenRoute {
@@ -77,6 +79,7 @@ func routeFor(raw string) screenRoute {
 	case "タグ検索", "キーワード検索":
 		page, ok := nativeSearchPage(input)
 		if !ok {
+			r.officialBrowse = true
 			return r
 		}
 		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
@@ -92,7 +95,12 @@ func routeFor(raw string) screenRoute {
 		}
 	case "ユーザー":
 		if numeric(parts[1], 9) {
-			r.kind, r.key = screenUser, parts[1]
+			page, ok := nativeUserVideoPage(input)
+			if !ok {
+				r.officialBrowse = true
+				return r
+			}
+			r.kind, r.key, r.page = screenUser, parts[1], page
 		}
 	case "マイリスト":
 		if len(parts) == 3 && parts[0] == "user" && numeric(parts[1], 9) {
@@ -102,6 +110,23 @@ func routeFor(raw string) screenRoute {
 		}
 	}
 	return r
+}
+
+func pageIndex(value string) (int, bool) {
+	page, err := strconv.Atoi(value)
+	return page - 1, numeric(value, len(value)) && err == nil && page > 0 && page <= maxCatalogPage+1
+}
+
+func nativeUserVideoPage(u *url.URL) (int, bool) {
+	if u.RawQuery == "" {
+		return 0, true
+	}
+	query, err := url.ParseQuery(u.RawQuery)
+	if err != nil || len(query) != 1 || len(query["page"]) != 1 ||
+		!strings.EqualFold(u.Hostname(), "www.nicovideo.jp") || !strings.HasSuffix(strings.TrimRight(u.Path, "/"), "/video") {
+		return 0, false
+	}
+	return pageIndex(query.Get("page"))
 }
 
 // Only route searches whose query can be applied by both search APIs.
@@ -116,7 +141,7 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 	if err != nil {
 		return 0, false
 	}
-	page := 1
+	page := 0
 	for key, values := range query {
 		if len(values) != 1 {
 			return 0, false
@@ -124,11 +149,8 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 		value := values[0]
 		switch key {
 		case "page":
-			if !numeric(value, len(value)) {
-				return 0, false
-			}
-			page, err = strconv.Atoi(value)
-			if err != nil || page < 1 || page > maxCatalogPage+1 {
+			var ok bool
+			if page, ok = pageIndex(value); !ok {
 				return 0, false
 			}
 		case "sort":
@@ -143,7 +165,7 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 			return 0, false
 		}
 	}
-	return page - 1, true
+	return page, true
 }
 
 func searchSort(u *url.URL) (sort, order string) {
@@ -157,8 +179,12 @@ func searchSort(u *url.URL) (sort, order string) {
 
 func (r screenRoute) withPage(page int) screenRoute {
 	r.page = page
-	if r.kind == screenSearch {
+	if r.kind == screenSearch || r.kind == screenUser {
 		u, _ := url.Parse(r.target)
+		if r.kind == screenUser {
+			u.Host = "www.nicovideo.jp"
+			u.Path, u.RawPath = "/user/"+r.key+"/video", ""
+		}
 		query := u.Query()
 		if page == 0 {
 			query.Del("page")
@@ -368,9 +394,20 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		path, title = "/v2/mylists/"+r.key, "マイリスト"
 	}
 	p := catalogPage{title: title}
-	data, err := c.request(ctx, apiHost, path, url.Values{
+	query := url.Values{
 		"page": {strconv.Itoa(r.page + 1)}, "pageSize": {strconv.Itoa(pageSize)},
-	}, private)
+	}
+	if r.kind == screenUser {
+		// Match the desktop posting list's default page size and ordering.
+		query.Set("pageSize", strconv.Itoa(userVideoPageSize))
+		query.Set("q", "")
+		query.Set("sortKey", "registeredAt")
+		query.Set("sortOrder", "desc")
+		query.Set("_language", "ja-jp")
+		query.Set("sensitiveContents", "mask")
+		query.Set("selectContentType", "long")
+	}
+	data, err := c.request(ctx, apiHost, path, query, private)
 	if err != nil {
 		return p, err
 	}
@@ -405,7 +442,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		if result.Data.Mylists == nil {
 			return p, errors.New("マイリスト一覧の応答形式が変わっています")
 		}
-		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount)
+		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, pageSize)
 		for _, list := range result.Data.Mylists {
 			id := strconv.FormatInt(list.ID, 10)
 			if !numeric(id, 12) || !private && !list.IsPublic {
@@ -425,13 +462,13 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 	}
 	rows := result.Data.Items
 	if r.kind == screenUser {
-		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount)
+		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, userVideoPageSize)
 	} else if m := result.Data.Mylist; m != nil {
 		if m.Name != "" {
 			p.title = m.Name
 		}
 		p.summary, p.links = plainDescription(m.Description)
-		p.more, rows = hasMore(m.HasNext, r.page, m.TotalItemCount), m.Items
+		p.more, rows = hasMore(m.HasNext, r.page, m.TotalItemCount, pageSize), m.Items
 	} else {
 		return p, errors.New("マイリストの応答形式が変わっています")
 	}
@@ -453,7 +490,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 	return p, nil
 }
 
-func hasMore(flag *bool, page, total int) bool {
+func hasMore(flag *bool, page, total, pageSize int) bool {
 	if flag != nil {
 		return *flag
 	}

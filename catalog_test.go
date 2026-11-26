@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -114,6 +115,45 @@ func TestFilteredSearchRemainsOfficial(t *testing.T) {
 			if e, ok := makeEntry(input, "絞り込み"); !ok || e.URL != input || routeFor(e.URL).kind != screenOfficial {
 				t.Errorf("saved official search = %+v, %v", e, ok)
 			}
+		}
+	}
+}
+
+func TestUserVideoPagesMatchTheOfficialPostingList(t *testing.T) {
+	base := home + "user/21962843/video"
+	route := routeFor(base + "?page=3")
+	if route.kind != screenUser || route.page != 2 || route.target != base+"?page=3" {
+		t.Fatalf("posting page 3: %+v", route)
+	}
+	c := newCatalog(nil)
+	for index, current := range []screenRoute{route, route.withPage(route.page + 1)} {
+		wantPage := strconv.Itoa(index + 3)
+		if current.target != base+"?page="+wantPage {
+			t.Fatalf("official page target = %q", current.target)
+		}
+		c.http.Transport = requestFunc(func(r *http.Request) (*http.Response, error) {
+			q := r.URL.Query()
+			if r.URL.Path != "/v3/users/21962843/videos" || q.Get("page") != wantPage || q.Get("pageSize") != "100" ||
+				q.Get("sortKey") != "registeredAt" || q.Get("sortOrder") != "desc" || q.Get("selectContentType") != "long" || q.Get("sensitiveContents") != "mask" {
+				t.Fatalf("posting list request = %s", r.URL)
+			}
+			return testResponse(http.StatusOK, `{"meta":{"status":200},"data":{"totalCount":301,"items":[]}}`), nil
+		})
+		page, err := c.load(t.Context(), current)
+		if err != nil || page.more != (index == 0) {
+			t.Fatalf("page %s, has next %v, error %v", wantPage, page.more, err)
+		}
+	}
+	if previous := route.withPage(0); previous.target != base || previous.page != 0 {
+		t.Fatalf("first page: %+v", previous)
+	}
+	for _, raw := range []string{base + "?page=3&sortKey=viewCount", base + "?page=2&page=3", home + "user/21962843?page=3", "https://sp.nicovideo.jp/user/21962843/video?page=3"} {
+		r := routeFor(raw)
+		if r.kind != screenOfficial || !r.browsesInMain() || r.target != raw {
+			t.Errorf("posting list filters were not handed off intact: %+v", r)
+		}
+		if e, ok := makeEntry(raw, "投稿一覧"); !ok || e.URL != raw {
+			t.Errorf("saved posting list filters: %+v", e)
 		}
 	}
 }

@@ -463,10 +463,12 @@ type Window struct {
 	onLeaveFullScreen  listeners[func()]
 	onPageTitleUpdated listeners[func(*TitleEvent)]
 	onWillNavigate     listeners[func(*NavigateEvent)]
+	onDidStartLoad     listeners[func(string)]
 	onDidNavigate      listeners[func(string)]
 	onDOMReady         listeners[func()]
 	onDidFinishLoad    listeners[func()]
 	onDidFailLoad      listeners[func(*LoadError)]
+	onDidCancelLoad    listeners[func()]
 	onRenderGone       listeners[func(string)]
 
 	// themeColor is the page's theme color, as its bridge told it, and
@@ -2180,6 +2182,13 @@ func (p *Page) OnWillNavigate(fn func(e *NavigateEvent)) (off func()) {
 	return p.w.onWillNavigate.add(fn, false)
 }
 
+// OnDidStartLoad observes an accepted top-level load, including loads
+// initiated by LoadURL or browser history. On Windows, redirects with the
+// same WebView2 navigation ID are part of that load.
+func (p *Page) OnDidStartLoad(fn func(url string)) (off func()) {
+	return p.w.onDidStartLoad.add(fn, false)
+}
+
 // OnDidNavigate is called when a navigation committed and a new page
 // started.
 func (p *Page) OnDidNavigate(fn func(url string)) (off func()) {
@@ -2195,6 +2204,11 @@ func (p *Page) OnDidFinishLoad(fn func()) (off func()) { return p.w.onDidFinishL
 // OnDidFailLoad is called when the page failed to load.
 func (p *Page) OnDidFailLoad(fn func(err *LoadError)) (off func()) {
 	return p.w.onDidFailLoad.add(fn, false)
+}
+
+// OnDidCancelLoad observes a canceled current load on Windows.
+func (p *Page) OnDidCancelLoad(fn func()) (off func()) {
+	return p.w.onDidCancelLoad.add(fn, false)
 }
 
 // OnRenderProcessGone is called when the web content process crashed or
@@ -2341,7 +2355,9 @@ func (h *windowHandler) WillNavigate(nav platform.Navigation) bool {
 	return !e.prevented
 }
 
-func (h *windowHandler) NavigationStarted(string) {}
+func (h *windowHandler) NavigationStarted(url string) { fire1(&h.w.onDidStartLoad, url) }
+
+func (h *windowHandler) NavigationCanceled() { fire(&h.w.onDidCancelLoad) }
 
 // pageOrigin returns the origin of a page at rawURL, as scheme://host,
 // that of the page that made it for a blob: URL.

@@ -55,6 +55,7 @@ type window struct {
 	filtersAll    bool
 	hidingScript  string
 	navigating    string
+	navigationID  uint64
 	// reloadAdopted reloads the first document of an adopted popup
 	// (newWindowRequested).
 	reloadAdopted bool
