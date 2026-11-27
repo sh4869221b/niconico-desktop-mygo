@@ -375,6 +375,7 @@ func (b *browser) copyCurrent() {
 }
 
 func (b *browser) draw(c *ui.Context) {
+	c.SetTheme(readableAppTheme(c.Theme()))
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
