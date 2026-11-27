@@ -209,8 +209,10 @@ func nativeComments(ctx context.Context, w watchData) ([]timedComment, error) {
 			if c.VposMs < 0 || c.VposMs > 86_400_000 || strings.TrimSpace(c.Body) == "" || len(out) >= 15000 {
 				continue
 			}
-			r := []rune(strings.Join(strings.Fields(c.Body), " "))
-			c.Body = string(r[:min(len(r), 120)])
+			c.Body = cleanDanmakuText(c.Body)
+			if c.Body == "" {
+				continue
+			}
 			out = append(out, c)
 		}
 	}
