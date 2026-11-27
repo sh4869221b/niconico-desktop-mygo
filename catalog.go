@@ -542,11 +542,14 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 				label = "非公開"
 			}
 			item := card{link: link, title: list.Name, summary: fmt.Sprintf("%s  ·  %d 件", label, list.ItemsCount)}
+			maskedSample := false
 			for _, sample := range list.SampleItems {
+				maskedSample = maskedSample || sample.Video.RequireSensitiveMasking
 				if item.thumbnail = sample.Video.thumbnailURL(); item.thumbnail != "" {
 					break
 				}
 			}
+			item.masked = item.thumbnail == "" && maskedSample
 			p.items = append(p.items, item)
 		}
 		return p, nil
