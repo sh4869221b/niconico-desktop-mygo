@@ -31,15 +31,23 @@ func (b *browser) showSearchRoute(r screenRoute) {
 
 func (b *browser) search(byTag bool) {
 	input := &b.searchInput
+	displayed := input.active && input.field == input.term
 	target := resolve(input.field, byTag)
-	if byTag && input.active && input.byTag && input.field == input.term {
-		// A tag opened from a video can contain significant spaces.
-		target = exactSearchURL("tag", input.term)
+	if displayed {
+		mode := "search"
+		if byTag {
+			mode = "tag"
+		}
+		// Search terms from result pages can resemble navigation input or
+		// contain significant spaces. Reuse them as exact terms.
+		target = exactSearchURL(mode, input.term)
 	}
 	if target == "" {
 		b.status = "検索語・タグ・動画ID、またはニコニコ公式のHTTPS URLを入力してください。"
 		return
 	}
-	input.draft, input.field = "", input.term
+	if !displayed {
+		input.draft, input.field = "", input.term
+	}
 	b.navigate(target)
 }

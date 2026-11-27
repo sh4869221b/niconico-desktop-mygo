@@ -69,6 +69,8 @@ func TestSearchInputPreservesAnUnsubmittedDraft(t *testing.T) {
 	if input, _ := view.Access(field); input.Value != "another" {
 		t.Fatalf("draft obscured the current tag: %q", input.Value)
 	}
+	view.Key(ui.Ctrl, ui.KeyL)
+	view.Key(0, ui.KeyEnter)
 	b.navigate(home)
 	view.Frame()
 	if input, _ := view.Access(field); input.Value != "保存していない下書き" {
@@ -78,9 +80,27 @@ func TestSearchInputPreservesAnUnsubmittedDraft(t *testing.T) {
 
 func TestSearchInputTracksOfficialSearchRoute(t *testing.T) {
 	b := &browser{}
-	r := routeFor(home + "tag/公式%20タグ?unsupported=1")
+	r := routeFor(exactSearchURL("tag", "公式 / タグ") + "?unsupported=1")
 	b.showSearchRoute(r)
-	if !r.officialBrowse || !b.searchInput.byTag || b.searchInput.field != "公式 タグ" {
+	if !r.officialBrowse || !b.searchInput.byTag || b.searchInput.field != "公式 / タグ" {
 		t.Fatalf("unsupported filters did not preserve the displayed search: %+v", b.searchInput)
+	}
+}
+
+func TestSearchInputRepeatsKeywordThatLooksLikeVideoID(t *testing.T) {
+	b := &browser{index: -1, closed: true}
+	b.navigate(home + "search/sm9")
+	view := ui.NewTester(b.draw, 960, 650)
+	view.Key(ui.Ctrl, ui.KeyL)
+	view.Key(0, ui.KeyEnter)
+	r := b.navigation[b.index]
+	if r.kind != screenSearch || accountSearchParameters(r).Get("keyword") != "sm9" {
+		t.Fatalf("resubmitting the displayed keyword opened %+v", r)
+	}
+	view.Key(ui.Ctrl, ui.KeyA)
+	view.Type("sm12")
+	view.Key(0, ui.KeyEnter)
+	if r := b.navigation[b.index]; r.kind != screenVideo || r.key != "sm12" {
+		t.Fatalf("typed video ID was not opened: %+v", r)
 	}
 }
