@@ -155,7 +155,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					r.X, r.Y = 0, 0
 					if n.commentViewport != r {
 						n.commentViewport = r
-						p.win.Invalidate()
+						c.Invalidate()
 					}
 				})
 				vw, vh := s.Size()

@@ -153,8 +153,10 @@ type commentLanes struct {
 
 func (l *commentLanes) reset(height float32) {
 	l.rowHeight = max(2, height/120)
+	n := max(1, int(height/l.rowHeight))
 	for i := range l.rows {
-		l.rows[i] = make([]commentBox, max(1, int(height/l.rowHeight)))
+		l.rows[i] = slices.Grow(l.rows[i][:0], n)[:n]
+		clear(l.rows[i])
 	}
 	l.overflow = [3]int{}
 }
@@ -174,18 +176,18 @@ func (l *commentLanes) place(c commentBox, pos commentPosition, width, height fl
 		return previous.x(c.start, width)+previous.width+gap > width ||
 			previous.x(previous.end, width)+previous.width+gap > c.x(previous.end, width)
 	}
-	run := 0
-	for k, previous := range rows {
-		if conflicts(previous) {
-			run = 0
-			continue
+	// A conflict at row k rules out every candidate starting from first
+	// through k. Check the far end first so a full lane takes one probe.
+search:
+	for first := 0; first+slots <= len(rows); {
+		end := first + slots
+		for k := end - 1; k >= first; k-- {
+			if conflicts(rows[k]) {
+				first = k + 1
+				continue search
+			}
 		}
-		run++
-		if run < slots {
-			continue
-		}
-		first := k + 1 - slots
-		for i := first; i <= k; i++ {
+		for i := first; i < end; i++ {
 			rows[i] = c
 		}
 		y := float32(first) * l.rowHeight
@@ -212,14 +214,25 @@ type drawnComment struct {
 	style    commentStyle
 }
 
+type commentMeasureKey struct {
+	body  string
+	size  float32
+	fixed bool
+}
+
+type commentMeasure struct {
+	width, height, fontSize float32
+}
+
 type danmakuOverlay struct {
 	width, height float32
 	// The last video time and next comment allow incremental playback. On a seek,
 	// prime the lanes from earlier comments instead of depending on wall-clock time.
-	last   int64
-	next   int
-	lanes  commentLanes
-	active []drawnComment
+	last     int64
+	next     int
+	lanes    commentLanes
+	active   []drawnComment
+	measures map[commentMeasureKey]commentMeasure
 }
 
 // The official player lets comments cross the letterbox bars of a narrow
@@ -234,7 +247,11 @@ func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue,
 	if r.W < 10 || r.H < 30 {
 		return
 	}
-	if d.width != r.W || d.height != r.H || ms < d.last || ms-d.last >= scrollLifetime {
+	resized := d.width != r.W || d.height != r.H
+	if resized {
+		clear(d.measures)
+	}
+	if resized || ms < d.last || ms-d.last >= scrollLifetime {
 		d.width, d.height = r.W, r.H
 		d.lanes.reset(r.H)
 		clear(d.active)
@@ -255,30 +272,19 @@ func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue,
 		c := comments[d.next]
 		d.next++
 		style := c.style
-		size := max(6, style.size*r.H/360)
-		font := ui.Font{Family: "Arial", Size: size, Weight: 700, Lang: "ja", LineHeight: 1.15}
-		layout := ui.ShapeText(c.body, font, 0)
-		width, height := commentExtent(layout)
-		if style.position != scrollComment {
-			// Fixed comments should remain readable even when a line is wider than the picture.
-			if width > r.W-4 || height > r.H-4 {
-				font.Size *= max(0.15, min((r.W-4)/width, (r.H-4)/height))
-				layout = ui.ShapeText(c.body, font, 0)
-				width, height = commentExtent(layout)
-			}
-			if strings.Contains(c.body, "\n") {
-				layout = ui.ShapeRichTextWith([]ui.Span{{Text: c.body}}, font, ui.TextShape{Width: width + 0.5, Align: ui.Center})
-				width, height = commentExtent(layout)
-			}
-		}
+		m := d.measure(c)
+		width, height := m.width, m.height
 		if width <= 0 || height <= 0 {
 			continue
 		}
 		box := commentBox{start: c.start, end: c.end, width: width, height: height}
 		box.y = d.lanes.place(box, style.position, r.W, r.H)
 		if c.end > ms {
-			d.active = append(d.active, drawnComment{box, c.body, font.Size, style})
+			d.active = append(d.active, drawnComment{box, c.body, m.fontSize, style})
 		}
+	}
+	if len(d.active) == 0 {
+		return
 	}
 	// The toolkit draws a single cached stroke glyph and a fill. Its width
 	// includes both sides of the outline, so double the old outward offset.
@@ -306,6 +312,37 @@ func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue,
 			}
 		}
 	})
+}
+
+// The same text, size and alignment share metrics within a video viewport.
+// Keep only numeric geometry. Shaped layouts and glyphs belong to MyGo.
+func (d *danmakuOverlay) measure(c danmakuCue) commentMeasure {
+	key := commentMeasureKey{c.body, c.style.size, c.style.position != scrollComment}
+	if m, ok := d.measures[key]; ok {
+		return m
+	}
+	size := max(6, c.style.size*d.height/360)
+	font := ui.Font{Family: "Arial", Size: size, Weight: 700, Lang: "ja", LineHeight: 1.15}
+	width, height := ui.ShapeText(c.body, font, 0).Size()
+	if key.fixed {
+		// Fixed comments should remain readable even when a line is wider than the picture.
+		if width > d.width-4 || height > d.height-4 {
+			font.Size *= max(0.15, min((d.width-4)/width, (d.height-4)/height))
+			width, height = ui.ShapeText(c.body, font, 0).Size()
+		}
+		if strings.Contains(c.body, "\n") {
+			layout := ui.ShapeRichTextWith([]ui.Span{{Text: c.body}}, font, ui.TextShape{Width: width + 0.5, Align: ui.Center})
+			width, height = commentExtent(layout)
+		}
+	}
+
+	m := commentMeasure{width, height, font.Size}
+	// The player owns one cue list (at most 15,000 comments).
+	if d.measures == nil {
+		d.measures = make(map[commentMeasureKey]commentMeasure)
+	}
+	d.measures[key] = m
+	return m
 }
 
 func commentExtent(layout *ui.TextLayout) (w, h float32) {

@@ -151,3 +151,36 @@ func TestDanmakuTextKeepsOutlineAndClip(t *testing.T) {
 		t.Fatalf("expected red fill and black outline, got %d and %d pixels", red, dark)
 	}
 }
+
+// Exhaust every pattern of holes in a short lane, including end-of-array
+// fits. First-fit and the fallback offset are observable on a saturated video.
+func TestDanmakuFirstFreeRun(t *testing.T) {
+	const rows = 8
+	for mask := 0; mask < 1<<rows; mask++ {
+		for slots := 2; slots <= rows; slots++ {
+			var lanes commentLanes
+			lanes.reset(16)
+			for k := range lanes.rows[topComment] {
+				if mask&(1<<k) != 0 {
+					lanes.rows[topComment][k].end = 100
+				}
+			}
+			want := -1
+			for i := 0; i+slots <= rows; i++ {
+				if mask&(((1<<slots)-1)<<i) == 0 {
+					want = i
+					break
+				}
+			}
+			box := commentBox{start: 0, end: 100, width: 16, height: float32(slots*2 - 2)}
+			y := lanes.place(box, topComment, 64, 16)
+			if want < 0 {
+				if lanes.overflow[topComment] != 1 || y != 0 {
+					t.Fatalf("mask %08b, slots %d: missing overflow", mask, slots)
+				}
+			} else if y != float32(want*2) || lanes.overflow[topComment] != 0 {
+				t.Fatalf("mask %08b, slots %d: got y=%v, want %d", mask, slots, y, want*2)
+			}
+		}
+	}
+}
