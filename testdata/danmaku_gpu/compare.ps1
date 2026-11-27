@@ -5,6 +5,7 @@ $ErrorActionPreference = "Stop"
 $here = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $base = "443592d9e4df5b52859aef11cbce30f3593c2787"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+$savedDenseCheck = $env:DANMAKU_CHECK_DENSE_ONLY
 $old = Join-Path $tmp "base"
 $actual = Join-Path $tmp "candidate"
 New-Item -ItemType Directory $tmp | Out-Null
@@ -38,11 +39,12 @@ try {
         $out | Write-Output
         if ($rc) { throw "D3D11 comparison for $Revision failed" }
         if (@($out | Where-Object { $_ -match ': FRAME ' }).Count -ne 54) { throw "Expected 54 readbacks" }
-        $summary = "54 same-scene D3D11 images and instance counts, a translucent composite and 14 damage updates match $base ($Revision)."
+        $summary = "54 same-scene D3D11 images and instance counts, a translucent composite and 19 retained-buffer frames match $base ($Revision)."
         Write-Output $summary
         if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary }
     } finally { Pop-Location }
 } finally {
+    $env:DANMAKU_CHECK_DENSE_ONLY = $savedDenseCheck
     foreach ($dir in @($actual,$old)) {
         if (Test-Path (Join-Path $dir ".git")) { git -C $here worktree remove --force $dir }
     }

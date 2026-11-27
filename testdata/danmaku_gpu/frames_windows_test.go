@@ -122,6 +122,30 @@ func testDanmakuDamage(t *testing.T) {
 	n.stream.Pause()
 	var history ui.DanmakuHistory
 	defer history.Close()
+	modes := [3]int{}
+	compare := func(rec *ui.Recorder, name string) {
+		t.Helper()
+		want, refMode, err := history.Draw(rec, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, candMode, err := history.Draw(rec, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		full, _, err := rec.DanmakuTestBGRA(true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(want, got) {
+			t.Errorf("retained %s differs (redraw mode %d/%d)", name, refMode, candMode)
+		}
+		if !bytes.Equal(want, full) {
+			t.Errorf("reference retained %s differs from full redraw", name)
+		}
+		modes[candMode]++
+		t.Logf("DAMAGE %s reference=%d candidate=%d", name, refMode, candMode)
+	}
 	index := 0
 	for _, window := range []struct {
 		w, h  int
@@ -133,29 +157,31 @@ func testDanmakuDamage(t *testing.T) {
 	} {
 		rec := ui.NewRecorder(draw, ui.RecorderOptions{Width: window.w, Height: window.h, Scale: window.scale})
 		for _, ms := range window.times {
-			n.stream.Seek(time.Duration(ms) * time.Millisecond)
+			at := time.Duration(ms) * time.Millisecond
+			if n.stream.Position() != at {
+				n.stream.Seek(at)
+			}
 			rec.Frame(time.Duration(index) * time.Second / 60)
 			index++
-			want, refMode, err := history.Draw(rec, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			got, candMode, err := history.Draw(rec, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			full, _, err := rec.DanmakuTestBGRA(true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !bytes.Equal(want, got) {
-				t.Errorf("retained frame %d at %dms differs (redraw mode %d/%d)", index, ms, refMode, candMode)
-			}
-			if !bytes.Equal(want, full) {
-				t.Errorf("reference retained frame %d at %dms differs from full redraw", index, ms)
-			}
-			t.Logf("DAMAGE %dms %d active=%d reference=%d candidate=%d", ms, window.w, len(n.danmaku.active), refMode, candMode)
+			compare(rec, fmt.Sprintf("%dms %d active=%d", ms, window.w, len(n.danmaku.active)))
 		}
 		rec.Close()
+	}
+	// A small isolated change and an unchanged scene force both preservation
+	// paths even when moving danmaku damages the entire video viewport.
+	var x float32
+	rec := ui.NewRecorder(func(c *ui.Context) {
+		ui.Box(c).Fill().Background(ui.RGB(10, 40, 60)).Children(func() {
+			ui.Box(c).Absolute().Left(x).Top(10).Size(25, 12).Background(ui.RGB(200, 20, 50))
+		})
+	}, ui.RecorderOptions{Width: 450, Height: 270})
+	defer rec.Close()
+	for i, at := range []float32{10, 10, 12, 14, 14} {
+		x = at
+		rec.Frame(time.Duration(i) * time.Second / 60)
+		compare(rec, fmt.Sprintf("local change %d", i))
+	}
+	if history.SupportsDamage() && (modes[1] == 0 || modes[2] == 0) {
+		t.Errorf("expected to exercise partial and unchanged frames, got modes %v", modes)
 	}
 }

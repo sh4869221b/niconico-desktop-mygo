@@ -39,3 +39,7 @@ func (h *DanmakuHistory) Close() {
 	h.candidate.Close()
 	h.reference.Close()
 }
+
+func (h *DanmakuHistory) SupportsDamage() bool {
+	return h.reference.SupportsDamage() && h.candidate.SupportsDamage()
+}

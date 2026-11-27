@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 0
+          fetch-depth: ${{ github.ref == 'refs/heads/codex/danmaku-gpu-astra-max' && '0' || '1' }}
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod

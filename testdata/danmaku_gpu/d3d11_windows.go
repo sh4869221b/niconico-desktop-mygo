@@ -131,3 +131,5 @@ func (h *DanmakuHistory) Close() {
 		destroyWindow(h.hwnd)
 	}
 }
+
+func (h *DanmakuHistory) SupportsDamage() bool { return h.renderer != nil && h.renderer.ctx1 != 0 }
