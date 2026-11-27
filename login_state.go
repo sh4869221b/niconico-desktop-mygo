@@ -70,6 +70,8 @@ func (b *browser) checkLogin() {
 	b.loginCancel = cancel
 	b.loginCheck++
 	check := b.loginCheck
+	retryList := !b.official && b.index >= 0 && (b.navigation[b.index].kind == screenOwnLists || b.navigation[b.index].kind == screenOwnList) && b.resultErr != nil
+	epoch := b.epoch
 	b.loginState = loginChecking
 	b.win.Invalidate()
 	go func() {
@@ -81,6 +83,9 @@ func (b *browser) checkLogin() {
 			}
 			b.loginCancel = nil
 			b.loginState = state
+			if retryList && !b.official && b.epoch == epoch {
+				b.refreshNative()
+			}
 			b.win.Invalidate()
 		})
 	}()
