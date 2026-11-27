@@ -229,26 +229,6 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		p.draw(c)
 		return
 	}
-	if !c.FocusTakesText() && !n.commentList.FocusWithin(c) {
-		if c.Shortcut(0, ui.KeySpace) {
-			if n.stream != nil {
-				toggleNativePlayback(n.stream)
-			} else if n.loadingStream {
-				n.pauseRequested = !n.pauseRequested
-			}
-		}
-		if n.stream != nil && c.Shortcut(0, ui.KeyM) {
-			n.stream.SetMuted(!n.stream.Muted())
-		}
-	}
-	if p.win != nil {
-		if c.Shortcut(0, ui.KeyF11) {
-			p.win.ToggleFullScreen()
-		}
-		if p.win.IsFullScreen() && c.Shortcut(0, ui.KeyEscape) {
-			p.win.SetFullScreen(false)
-		}
-	}
 	t := c.Theme()
 	w, h := c.Size()
 	b.applyPendingCommentNG(n)
@@ -381,6 +361,27 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			})
 		})
 	})
+	if !c.FocusTakesText() && !n.commentList.FocusWithin(c) {
+		if c.Shortcut(0, ui.KeySpace) {
+			if n.stream != nil {
+				toggleNativePlayback(n.stream)
+			} else if n.loadingStream {
+				n.pauseRequested = !n.pauseRequested
+			}
+		}
+		if n.stream != nil && c.Shortcut(0, ui.KeyM) {
+			n.stream.SetMuted(!n.stream.Muted())
+		}
+	}
+	if p.win != nil {
+		if c.Shortcut(0, ui.KeyF11) {
+			p.win.ToggleFullScreen()
+		}
+		if p.win.IsFullScreen() && c.Shortcut(0, ui.KeyEscape) {
+			p.win.SetFullScreen(false)
+		}
+	}
+
 }
 
 func toggleNativePlayback(s *ui.VideoPlayer) {
