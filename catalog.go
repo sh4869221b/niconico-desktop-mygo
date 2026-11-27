@@ -389,7 +389,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	}
 	type row struct {
 		ContentID, Title, ThumbnailURL             string
-		LengthSeconds, ViewCounter, CommentCounter int
+		LengthSeconds, ViewCounter, CommentCounter *int
 		Tags                                       json.RawMessage
 		UserID, ChannelID                          json.RawMessage
 	}
@@ -402,7 +402,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	}
 	p.more = (r.page+1)*searchPageSize < min(result.Meta.TotalCount, snapshotResultLimit)
 	for _, item := range result.Data {
-		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
+		if v, ok := makeOptionalVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
 			v.tags = searchVideoTags(item.Tags)
 			v.owner = (publisherMetadata{ID: item.ChannelID}).publisher("channel").videos
@@ -417,8 +417,8 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 
 type apiVideo struct {
 	ID, Title               string
-	Duration                int
-	Count                   struct{ View, Comment int }
+	Duration                *int
+	Count                   struct{ View, Comment *int }
 	Owner                   publisherMetadata
 	Tag, Tags               json.RawMessage
 	Thumbnail               struct{ URL, MiddleURL, ListingURL string }
@@ -437,7 +437,7 @@ func (v apiVideo) thumbnailURL() string {
 }
 
 func (v apiVideo) card() (card, bool) {
-	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
+	x, ok := makeOptionalVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
 	x.thumbnail = v.thumbnailURL()
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
@@ -650,4 +650,20 @@ func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {
 	default:
 		return catalogPage{}, nil
 	}
+}
+
+func makeOptionalVideo(id, title string, duration, views, comments *int) (card, bool) {
+	item, ok := makeVideo(id, title, 0, 0, 0)
+	count := func(value *int) string {
+		if value == nil || *value < 0 {
+			return "—"
+		}
+		return strconv.Itoa(*value)
+	}
+	length := "—"
+	if duration != nil && *duration >= 0 {
+		length = fmt.Sprintf("%d:%02d", *duration/60, *duration%60)
+	}
+	item.summary = length + "  ·  再生 " + count(views) + "  ·  コメント " + count(comments)
+	return item, ok
 }
