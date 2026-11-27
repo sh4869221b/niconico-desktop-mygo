@@ -29,6 +29,8 @@ type browser struct {
 	data                         library
 	history, loaded, closed      bool
 	showLibrary                  bool
+	layoutPath                   string
+	layoutLoadErr                error
 	session                      *mygo.Session
 	loginState                   loginState
 	loginCheck                   uint64
@@ -75,6 +77,8 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.layoutPath = filepath.Join(dir, "NiconicoDesktopMyGo", "layout.json")
+		b.showLibrary, b.layoutLoadErr = loadSidebarVisibility(b.layoutPath)
 		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
 		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
@@ -92,7 +96,7 @@ func (b *browser) start(initial string) {
 		b.storeWarning = "保存先を取得できません。"
 	}
 	b.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
+		StateKey: "main", Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
 	_ = b.win.SetIcon(appIconPNG)
@@ -466,7 +470,7 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.leaveOfficial()
 			}
 			if ui.Button(c, "登録・履歴").Checked(b.showLibrary).Clicked() {
-				b.showLibrary = !b.showLibrary
+				b.toggleLibrary()
 			}
 			if ui.Button(c, "マイリスト").Clicked() {
 				b.navigate(mylists)

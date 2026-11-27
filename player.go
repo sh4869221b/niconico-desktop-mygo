@@ -180,7 +180,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 		}
 		p := &playerWindow{mode: mode, target: route.target, webVideo: route.link, status: "再生を準備しています…"}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
-			Title: appName + " · プレーヤー",
+			StateKey: "player", Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
 			Content: ui.View(func(c *ui.Context) { b.drawPlayer(p, c) }),
 			Page:    mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
