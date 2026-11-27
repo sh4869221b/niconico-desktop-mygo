@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/internal/media"
+	"github.com/egoist/mygo/internal/wait"
 )
 
 func TestMediaFoundationPreparesInitialPicture(t *testing.T) {
@@ -29,43 +32,37 @@ func TestMediaFoundationPreparesInitialPicture(t *testing.T) {
 				mf := engine.(*mfEngine)
 				mf.PrepareStart(at)
 				mf.SetMuted(false)
-				tick := time.NewTicker(time.Second / 60)
-				defer tick.Stop()
-				deadline := time.NewTimer(12 * time.Second)
-				defer deadline.Stop()
-				for {
+				var pic media.Picture
+				if !wait.Poll(func() bool {
+					// Poll on the test's locked OS thread for Media Foundation and Direct3D.
 					if call(mf.engine, engineGetMuted) == 0 {
 						t.Fatal("audio gate opened before receiving a frame")
 					}
-					pic, _, ok := mf.Frame(time.Now())
+					var ready bool
+					pic, _, ready = mf.Frame(time.Now())
 					if _, err := mf.State(); err != nil {
 						if fixture == "start-av.mp4" && strings.Contains(err.Error(), "0xc00d36fa") {
 							t.Skipf("no Windows audio sink: %v", err)
 						}
 						t.Fatal(err)
 					}
-					if ok {
-						pix := pic.RGBA(nil)
-						if len(pix) != 64*48*4 || at == 0 && pix[0] < 180 || at != 0 && pix[2] < 180 {
-							t.Fatal("decoded picture did not match the initial position")
-						}
-						position := callGetDouble(mf.engine, engineGetCurrentTime)
-						if math.IsNaN(position) || math.Abs(position-at.Seconds()) > 0.016 ||
-							call(mf.engine, engineIsPaused) == 0 {
-							t.Fatalf("clock moved before presentation: %fs, requested %s", position, at)
-						}
-						mf.PresentStart()
-						if call(mf.engine, engineGetMuted) != 0 || call(mf.engine, engineIsPaused) == 0 {
-							t.Fatal("presentation did not restore sound while leaving playback paused")
-						}
-						return
-					}
-					select {
-					case <-tick.C:
-					case <-deadline.C:
-						t.Fatalf("no target picture: phase %v, state %d, position %f, target %v",
-							mf.start.phase, call(mf.engine, engineGetReadyState), callGetDouble(mf.engine, engineGetCurrentTime), mf.start.target)
-					}
+					return ready
+				}) {
+					t.Fatalf("no target picture after %v: phase %v, state %d, position %f, target %v",
+						wait.Guard, mf.start.phase, call(mf.engine, engineGetReadyState), callGetDouble(mf.engine, engineGetCurrentTime), mf.start.target)
+				}
+				pix := pic.RGBA(nil)
+				if len(pix) != 64*48*4 || at == 0 && pix[0] < 180 || at != 0 && pix[2] < 180 {
+					t.Fatal("decoded picture did not match the initial position")
+				}
+				position := callGetDouble(mf.engine, engineGetCurrentTime)
+				if math.IsNaN(position) || math.Abs(position-at.Seconds()) > 0.016 ||
+					call(mf.engine, engineIsPaused) == 0 {
+					t.Fatalf("clock moved before presentation: %fs, requested %s", position, at)
+				}
+				mf.PresentStart()
+				if call(mf.engine, engineGetMuted) != 0 || call(mf.engine, engineIsPaused) == 0 {
+					t.Fatal("presentation did not restore sound while leaving playback paused")
 				}
 			})
 		}
