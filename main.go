@@ -29,6 +29,8 @@ type browser struct {
 	data                         library
 	history, loaded, closed      bool
 	showLibrary                  bool
+	libraryQuery, libraryKind    string
+	libraryExpanded              bool
 	session                      *mygo.Session
 	loginState                   loginState
 	loginCheck                   uint64
@@ -384,6 +386,9 @@ func (b *browser) draw(c *ui.Context) {
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
 				b.sidebar(c)
+				if b.libraryExpanded {
+					return
+				}
 			}
 			if !b.official {
 				b.drawNative(c)
@@ -504,7 +509,13 @@ func (b *browser) sidebar(c *ui.Context) {
 	if width < 900 {
 		sidebarWidth = 174
 	}
-	ui.Column(c).Width(sidebarWidth).Background(c.Theme().Surface).Padding(10).Gap(8).Children(func() {
+	pane := ui.Column(c).Background(c.Theme().Surface).Padding(10).Gap(8)
+	if b.libraryExpanded {
+		pane.Grow(1).MinWidth(0)
+	} else {
+		pane.Width(sidebarWidth)
+	}
+	pane.Children(func() {
 		ui.Row(c).Gap(5).Children(func() {
 			if ui.Button(c, "登録済み").Disabled(!b.history).Clicked() {
 				b.history = false
@@ -513,27 +524,55 @@ func (b *browser) sidebar(c *ui.Context) {
 				b.history = true
 			}
 		})
+		label := "ライブラリを広く表示"
+		if b.libraryExpanded {
+			label = "通常表示に戻る"
+		}
+		if ui.Button(c, label).Clicked() {
+			b.libraryExpanded = !b.libraryExpanded
+		}
+		ui.TextInput(c, &b.libraryQuery).Label("ライブラリ内を検索").Placeholder("タイトル・URLを検索").FillWidth().MinWidth(0)
+		kind := b.libraryKind
+		if kind == "" {
+			kind = "すべての種類"
+		}
+		if ui.Select(c, &kind, libraryKinds).Label("保存した項目の種類").FillWidth().Changed() {
+			b.libraryKind = kind
+		}
 		items := b.data.Pins
 		if b.history {
 			items = b.data.History
 		}
-		if len(items) == 0 {
+		visible := filterLibrary(items, b.libraryQuery, kind)
+		ui.Text(c, fmt.Sprintf("%d / %d 件", len(visible), len(items))).TextColor(c.Theme().TextMuted)
+		if len(visible) == 0 {
 			ui.Text(c, "表示する項目はありません。").TextColor(c.Theme().TextMuted).Wrap()
 			return
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		ui.Scroll(c.Key("library-results").Key(b.history).Key(b.libraryQuery).Key(kind)).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Gap(4).Children(func() {
-				for _, item := range items {
+				for _, item := range visible {
 					row := c.Key(item.URL)
 					ui.Row(row).Gap(4).AlignItems(ui.Center).Children(func() {
-						if ui.Button(row, "["+item.Kind+"] "+item.Title).Tooltip(item.Title).Grow(1).MinWidth(0).Clicked() {
+						label := libraryEntryLabel(item, b.history)
+						button := ui.Button(row, "").Label(label).Tooltip(item.Title).Grow(1).MinWidth(0).Justify(ui.Start).Children(func() {
+							text := ui.Text(row, label).Wrap()
+							if !b.libraryExpanded {
+								text.MaxLines(2)
+							}
+						})
+						if button.Clicked() {
 							b.navigate(item.URL)
+							b.libraryExpanded = false
 						}
 						if ui.Button(row, "×").Label("削除").Clicked() {
 							b.remove(item)
 							return
 						}
 					})
+					if b.libraryExpanded {
+						ui.Text(row, item.URL).TextColor(c.Theme().TextMuted).Wrap()
+					}
 				}
 			})
 		})
