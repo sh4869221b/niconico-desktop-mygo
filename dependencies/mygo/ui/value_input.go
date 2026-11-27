@@ -219,6 +219,13 @@ func sliderInput(n *node) {
 	if step <= 0 {
 		step = (b.hi - b.lo) / 100
 	}
+	if settings.keyStep > 0 {
+		step = settings.keyStep
+	}
+	pageStep := max(step, (b.hi-b.lo)/10)
+	if settings.pageStep > 0 {
+		pageStep = settings.pageStep
+	}
 	// The arrows move the knob the way they point.
 	back, forth := KeyLeft, KeyRight
 	if n.rtl() && !settings.vertical {
@@ -230,9 +237,9 @@ func sliderInput(n *node) {
 	case n.Shortcut(0, forth), n.Shortcut(0, KeyUp):
 		set(*b.value + step)
 	case n.Shortcut(0, KeyPageDown):
-		set(*b.value - max(step, (b.hi-b.lo)/10))
+		set(*b.value - pageStep)
 	case n.Shortcut(0, KeyPageUp):
-		set(*b.value + max(step, (b.hi-b.lo)/10))
+		set(*b.value + pageStep)
 	case n.Shortcut(0, KeyHome):
 		set(b.lo)
 	case n.Shortcut(0, KeyEnd):
