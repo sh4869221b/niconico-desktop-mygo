@@ -28,11 +28,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test
-        run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows github.com/egoist/mygo/internal/gpu/d3d11
+        run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows
       - name: Compare native player D3D11 pixels
         if: always() && !cancelled() && github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
         shell: pwsh
-        run: ./testdata/danmaku_gpu/compare.ps1 -DenseOnly
+        run: ./testdata/danmaku_gpu/compare.ps1
       - name: Vet
         run: go vet -mod=readonly ./...
       - name: Build and package

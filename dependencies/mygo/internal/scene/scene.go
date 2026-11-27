@@ -355,8 +355,6 @@ type Scene struct {
 	Background Color
 	Ops        []Op
 	Glyphs     []Glyph
-	// OutlinedRuns counts nonempty text strokes painted in this frame.
-	OutlinedRuns int
 	// Stops holds the stops of gradients (Op.Stops).
 	Stops []Stop
 	// Effects holds the effects of OpEffect operations.
@@ -440,7 +438,6 @@ func (s *Scene) Reset(width, height int, color Color) {
 	clear(s.Ops)
 	s.Ops = s.Ops[:0]
 	s.Glyphs = s.Glyphs[:0]
-	s.OutlinedRuns = 0
 	s.Stops = s.Stops[:0]
 	clear(s.Effects)
 	s.Effects = s.Effects[:0]

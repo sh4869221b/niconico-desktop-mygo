@@ -1157,7 +1157,6 @@ func (p *Painter) textStrokes(l *text.Layout, x, y float32, color Color, ts text
 		}
 	}
 	if end := int32(len(p.s.Glyphs)); end > start {
-		p.s.OutlinedRuns++
 		gs.add(p, scene.Op{Kind: scene.OpGlyphs, Start: start, End: end})
 	}
 }

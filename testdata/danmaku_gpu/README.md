@@ -24,3 +24,19 @@ pwsh ./testdata/danmaku_gpu/compare.ps1
 - 診断は別の実行で `MYGO_FRAME_STATS=all` を使い、インスタンス数、バッチ内訳、部分・全面の描画を比較する。コールバック回数と画面に提示されたフレーム数は個別に扱う。
 
 Windows CI の比較は画素と描画内容を検証する。GPU 使用率は実機の測定値を使う。
+
+## 実験結果
+
+最終版の描画コードは基準と同一。各実験はこのブランチの履歴から個別にビルドできる。
+
+| 候補 | Windows の画像比較 | NucBox の結果 |
+| --- | --- | --- |
+| [常時バッチ結合 47d71eb](https://github.com/sh4869221b/niconico-desktop-mygo/commit/47d71eb7fa93d306747f01db2a31d915fde02c09) | 54/54一致 | 通常 19 → 23%、高密度 78 → 75.5% |
+| [バッチ結合と透明余白の切り詰め b70602f](https://github.com/sh4869221b/niconico-desktop-mygo/commit/b70602f0005b24d4a179fba696170a7a7bb1d8cb) | 31/54状態で画素差。最大2階調 | 通常 19 → 21.5%、高密度 78 → 77% |
+| [既存の混在バッチに専用シェーダー 2412ed2](https://github.com/sh4869221b/niconico-desktop-mygo/commit/2412ed2f0eff11a030632b48b9c72e5d941c3bf7) | 54/54一致。バッチ数と描画面積も同じ | 未計測 |
+| [被覆ゼロの画素を破棄 5811f45](https://github.com/sh4869221b/niconico-desktop-mygo/commit/5811f4567784f6f46401fe1b2378146806f87b84) | 54/54と半透明の重ね合わせが一致。単一種類のグリフ用シェーダーで評価 | 未計測 |
+| [高密度だけバッチ結合 8a3020c](https://github.com/sh4869221b/niconico-desktop-mygo/commit/8a3020ced9ffb5b9a3d16e2ed09a3d74c4097952) | 54/54と半透明の重ね合わせが一致。縁取り文字列384件から切り替え | 通常は両版 19.5～20%。高密度の基準は72・79%、候補は76・76・73%。安定した低下を確認できず |
+
+常時結合と切り詰めの比較は各密度3巡の順序を入れ替えた実行。高密度で534～540コールバック、通常で519～540回だった。高密度限定は別の12実行で、通常536～540回、高密度の候補533～540回。高密度の基準1回は270回だったため、同等の538～540回の2回を表に載せた。
+
+同一シーンでの Windows CI は、[常時結合・切り詰め・混在シェーダーの比較](https://github.com/sh4869221b/niconico-desktop-mygo/actions/runs/45954939210)、[被覆ゼロの破棄](https://github.com/sh4869221b/niconico-desktop-mygo/actions/runs/45955210895)、[高密度限定の結合](https://github.com/sh4869221b/niconico-desktop-mygo/actions/runs/45955882469)で確認できる。最初の CI には不採用の切り詰め試験の差分も記録されている。
