@@ -45,3 +45,24 @@ func TestSavedPositionAndIdentity(t *testing.T) {
 		t.Fatal(b.currentTitle())
 	}
 }
+
+func TestSavedDefaultRankingDoesNotUseLaterPreference(t *testing.T) {
+	e, ok := makeEntry(home+"search/test?page=3", "test")
+	if !ok {
+		t.Fatal("entry")
+	}
+	pref := searchSortPreference{Sort: "v", Ascending: true}
+	restored := pref.apply(routeFor(e.openURL()))
+	sort, _ := restored.searchSort()
+	if sort.urlKey != "" || restored.page != 2 {
+		t.Fatal(restored)
+	}
+	path := filepath.Join(t.TempDir(), "library.json")
+	if err := saveLibrary(path, library{Pins: []entry{e}}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := loadLibrary(path)
+	if err != nil || l.Pins[0] != e {
+		t.Fatal(l, err)
+	}
+}

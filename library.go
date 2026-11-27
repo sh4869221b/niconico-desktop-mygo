@@ -51,6 +51,14 @@ func makeEntry(raw, title string) (entry, bool) {
 	e := entry{URL: u, Title: title, Kind: k}
 	r := routeFor(raw)
 	target, _ := url.Parse(u)
+	if r.kind == screenSearch {
+		// An explicit empty sort keeps the saved default ranking independent of later preferences.
+		q := target.Query()
+		if !q.Has("sort") {
+			q.Set("sort", "")
+		}
+		target.RawQuery = q.Encode()
+	}
 	if r.kind == screenVideo && r.startTime() > 0 {
 		q := target.Query()
 		q.Set("from", strconv.FormatInt(int64(r.startTime()/time.Second), 10))
