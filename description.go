@@ -181,9 +181,16 @@ func (b *browser) drawDescription(c *ui.Context, parts []descriptionPart) {
 			}
 			if part.link.link == "" {
 				ui.Text(c, part.text)
-			} else if ui.Link(c.Key(i), part.text, "").Label(part.link.title).Clicked() {
+			} else if ui.Link(c.Key(i), part.text, "").Label(strings.TrimSpace(part.text)).Description(part.link.title + " · " + descriptionAction(part.link.link)).Clicked() {
 				b.followDescription(part.link.link)
 			}
 		}
 	})
+}
+
+func descriptionAction(target string) string {
+	if routeFor(target).kind == screenVideo {
+		return "動画を再生"
+	}
+	return "一覧を開く"
 }
