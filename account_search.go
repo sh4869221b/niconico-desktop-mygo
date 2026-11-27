@@ -16,18 +16,23 @@ func accountSearchParameters(r screenRoute) url.Values {
 	if strings.HasPrefix(u.Path, "/tag/") {
 		key = "tag"
 	}
-	sort, requestedOrder := searchSort(u)
+	sort, ascending := r.searchSort()
 	order := "desc"
-	if requestedOrder == "a" {
+	if sort.snapshotKey == "" {
+		order = "none"
+	} else if ascending {
 		order = "asc"
 	}
-	return url.Values{key: {r.key}, "pageSize": {strconv.Itoa(pageSize)},
-		"page": {strconv.Itoa(r.page + 1)}, "sortKey": {searchSorts[sort].account}, "sortOrder": {order}}
+	return url.Values{
+		key: {r.key}, "pageSize": {strconv.Itoa(searchPageSize)}, "page": {strconv.Itoa(r.page + 1)},
+		"sortKey": {sort.apiKey}, "sortOrder": {order}, "channelVideoListingStatus": {"included"},
+		"selectContentType": {"long"}, "sensitiveContents": {"mask"}, "_language": {"ja-jp"},
+	}
 }
 
-func (c catalog) accountSearch(ctx context.Context, r screenRoute) (catalogPage, error) {
+func (c catalog) accountSearch(ctx context.Context, r screenRoute, private bool) (catalogPage, error) {
 	p := catalogPage{title: r.key}
-	data, err := c.request(ctx, apiHost, accountSearchPath, accountSearchParameters(r), true)
+	data, err := c.request(ctx, apiHost, accountSearchPath, accountSearchParameters(r), private)
 	if err != nil {
 		return p, err
 	}
@@ -42,14 +47,17 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute) (catalogPage,
 	if err != nil {
 		return p, err
 	}
-	if result.Meta.Status == 401 {
+	if private && (result.Meta.Status == 401 || result.Meta.Status == 403) {
 		return p, errSignIn
 	}
 	if result.Meta.Status != 200 || result.Data.Items == nil {
-		return p, errors.New("ログイン検索の結果を取得できませんでした")
+		return p, errors.New("検索結果を取得できませんでした")
 	}
-	p.searchMode = "ログイン検索"
-	p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, pageSize)
+	p.searchMode = "公開検索"
+	if private {
+		p.searchMode = "ログイン検索"
+	}
+	p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, searchPageSize)
 	for _, v := range result.Data.Items {
 		if item, ok := v.card(); ok {
 			p.items = append(p.items, item)

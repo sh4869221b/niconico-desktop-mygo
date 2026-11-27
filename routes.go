@@ -107,7 +107,8 @@ func canonical(raw string) (string, string) {
 			return "", ""
 		}
 		opts := url.Values{}
-		if val := u.Query().Get("sort"); sortKey.MatchString(val) {
+		val := u.Query().Get("sort")
+		if _, known := findSearchSort(val); val != "" && (known || sortKey.MatchString(val)) {
 			opts.Set("sort", val)
 		}
 		if val := u.Query().Get("order"); val == "a" || val == "d" {

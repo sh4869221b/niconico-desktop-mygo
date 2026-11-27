@@ -41,7 +41,7 @@ func TestBrowseLongListNavigation(t *testing.T) {
 	checkRoute(r.target)
 	// Reach an item that was outside the initial viewport, after resizing.
 	view.SetSize(1000, 600)
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 22; i++ {
 		view.Scroll(700, 350, 0, 480)
 	}
 	click(p.items[99].title)
@@ -80,4 +80,45 @@ func TestBrowseTabsAcrossVirtualRows(t *testing.T) {
 	if !view.Focused(p.items[98].title) {
 		t.Fatalf("Shift+Tab did not return to %q", p.items[98].title)
 	}
+}
+
+func TestSearchSortAndPagingWithKeyboard(t *testing.T) {
+	r := routeFor(home + "tag/kitty?page=3")
+	app := browser{navigation: []screenRoute{r}, result: catalogPage{more: true}, closed: true}
+	view := ui.NewTester(app.draw, 640, 520)
+	keyboardSelect := func(label string, moves int) {
+		t.Helper()
+		for i := 0; i < 24 && !view.Focused(label); i++ {
+			view.Key(0, ui.KeyTab)
+		}
+		if !view.Focused(label) {
+			t.Fatalf("could not focus %q", label)
+		}
+		view.Key(0, ui.KeySpace)
+		for range moves {
+			view.Key(0, ui.KeyDown)
+		}
+		view.Key(0, ui.KeyEnter)
+	}
+	check := func(page int, ascending bool) {
+		t.Helper()
+		got := app.navigation[app.index]
+		sort, asc := got.searchSort()
+		if got.key != "kitty" || got.page != page || sort.apiKey != "viewCount" || asc != ascending ||
+			accountSearchParameters(got).Get("tag") != "kitty" {
+			t.Fatalf("unexpected search route: %+v", got)
+		}
+	}
+	keyboardSelect("並べ替え", 3)
+	check(0, false)
+	if err := view.Click("次へ"); err != nil {
+		t.Fatal(err)
+	}
+	check(1, false)
+	keyboardSelect("並び順", 1)
+	check(0, true)
+	if err := view.Click("次へ"); err != nil {
+		t.Fatal(err)
+	}
+	check(1, true)
 }

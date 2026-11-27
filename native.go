@@ -86,6 +86,9 @@ func (b *browser) cancelLoad() {
 		b.cancel()
 		b.cancel = nil
 	}
+	if b.thumbnails != nil {
+		b.thumbnails.setVisible(nil)
+	}
 	b.epoch++
 }
 
@@ -100,7 +103,6 @@ func (b *browser) refreshNative() {
 		b.win.Invalidate()
 		return
 	}
-	b.status = "読み込み中…"
 	ctx, cancel := context.WithCancel(context.Background())
 	b.cancel = cancel
 	go func() {
@@ -192,11 +194,13 @@ func (b *browser) drawNative(c *ui.Context) {
 		return
 	}
 	r, p := b.navigation[b.index], b.result
-	scope := c.Key(fmt.Sprintf("native-%s-%d", r.link, r.page))
-	ui.Column(scope).Grow(1).MinWidth(0).Padding(18, 22).Gap(12).Children(func() {
+	epoch := b.epoch
+	// Keep the controls in the same focus scope while changing sort or page.
+	scope := c.Key(r.kind).Key(r.key)
+	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
 		if r.kind == screenHome {
 			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
-			ui.Row(scope).Gap(8).Children(func() {
+			ui.Row(scope).Gap(8).Wrap().Children(func() {
 				if ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
 				}
@@ -213,9 +217,15 @@ func (b *browser) drawNative(c *ui.Context) {
 		if title == "" {
 			title = "マイリスト"
 		}
+		if r.kind == screenSearch {
+			_, label := canonical(r.link)
+			ui.Text(scope, label).TextColor(t.TextMuted)
+		}
 		ui.Text(scope, title).FontSize(24).Bold().Wrap()
-		ui.Row(scope).Gap(8).Children(func() {
+		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			switch r.kind {
+			case screenSearch:
+				b.drawSearchSort(scope, r)
 			case screenVideo:
 				if ui.PrimaryButton(scope, "再生").Clicked() {
 					b.openPlayer(r.target)
@@ -240,52 +250,93 @@ func (b *browser) drawNative(c *ui.Context) {
 				b.openOfficial(r.target)
 			}
 		})
-		if b.busy {
-			return
-		}
-		if b.resultErr != nil {
-			ui.Text(scope, b.resultErr.Error()).TextColor(t.TextMuted).Wrap()
-			return
-		}
-		if r.page > 0 || p.more {
+		if r.page > 0 || p.more || r.kind == screenSearch {
 			ui.Row(scope).Gap(8).AlignItems(ui.Center).Children(func() {
-				if ui.Button(scope, "前へ").Disabled(r.page == 0).Clicked() {
+				if ui.Button(scope, "前へ").Disabled(b.busy || r.page == 0).Clicked() {
 					b.pageNative(-1)
 				}
 				ui.Text(scope, fmt.Sprintf("%d ページ", r.page+1))
-				if ui.Button(scope, "次へ").Disabled(!p.more).Clicked() {
+				if ui.Button(scope, "次へ").Disabled(b.busy || !p.more || r.page == maxCatalogPage).Clicked() {
 					b.pageNative(1)
 				}
 			})
 		}
-		// Short pages already fit in or near a viewport. Virtualize the
-		// longer pages, keeping the description and its links scrollable.
-		if len(p.items) > pageSize {
+		if b.epoch != epoch {
+			return
+		}
+		if b.busy {
+			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
+			return
+		}
+		if b.resultErr != nil {
+			ui.Text(scope, b.resultErr.Error()).Wrap()
+			if !errors.Is(b.resultErr, errSignIn) && ui.Button(scope, "再試行").Clicked() {
+				b.refreshNative()
+			}
+			return
+		}
+		if len(p.items) != 0 {
 			introRows := 0
 			if p.author != "" || p.summary != "" || len(p.links) > 0 {
 				introRows = 1
 			}
-			ui.List(scope, nil, len(p.items)+introRows, func(i int) {
-				if i < introRows {
-					ui.Column(scope).FillWidth().Gap(8).Children(func() { b.drawCatalogIntro(scope, p) })
-					return
+			listScope := scope.Key(epoch).Key(r.page)
+			pane := ui.Column(listScope).Grow(1).MinHeight(0).MinWidth(0)
+			state := ui.Local(pane, "viewport", func() ui.ListState { return ui.ListState{} })
+			if b.thumbnails != nil {
+				first, last := state.Visible()
+				start := max(0, first-introRows)
+				end := min(len(p.items), last+1-introRows)
+				if start < end {
+					b.thumbnails.setVisible(p.items[start:end])
+				} else {
+					b.thumbnails.setVisible(nil)
 				}
-				b.drawCatalogItem(scope, r.kind, p.items[i-introRows])
-			}).Grow(1).MinHeight(0).Gap(8)
+			}
+			pane.Children(func() {
+				ui.List(listScope, state, len(p.items)+introRows, func(i int) {
+					if i < introRows {
+						ui.Column(listScope).FillWidth().Gap(8).Children(func() { b.drawCatalogIntro(listScope, p) })
+						return
+					}
+					b.drawCatalogItem(listScope, r.kind, p.items[i-introRows])
+				}).Grow(1).MinHeight(0).Gap(6)
+			})
 			return
 		}
 		ui.Scroll(scope).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(scope).FillWidth().Gap(8).Children(func() {
 				b.drawCatalogIntro(scope, p)
-				if len(p.items) == 0 && r.kind != screenVideo {
+				if r.kind == screenSearch {
+					ui.Text(scope, "該当する動画はありません。").TextColor(t.TextMuted)
+				} else if r.kind != screenVideo {
 					ui.Text(scope, "表示する項目はありません。").TextColor(t.TextMuted)
-				}
-				for i, item := range p.items {
-					b.drawCatalogItem(scope.Key(i), r.kind, item)
 				}
 			})
 		})
 	})
+}
+
+func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
+	current, ascending := r.searchSort()
+	choice := current.label
+	order := "降順"
+	if ascending {
+		order = "昇順"
+	}
+	ui.Text(scope, "並べ替え").TextColor(scope.Theme().TextMuted)
+	changed := ui.Select(scope, &choice, searchSortLabels).Label("並べ替え").Width(160).Changed()
+	if current.snapshotKey != "" {
+		changed = ui.Select(scope, &order, []string{"降順", "昇順"}).Label("並び順").Width(74).Changed() || changed
+	}
+	if changed {
+		for _, sort := range searchSorts {
+			if sort.label == choice {
+				b.openNative(r.withSearchSort(sort, order == "昇順"), true)
+				break
+			}
+		}
+	}
 }
 
 func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
@@ -304,15 +355,38 @@ func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
 }
 
 func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card) {
-	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-		if ui.Button(scope, item.title).Tooltip(item.title).Grow(1).MinWidth(0).Clicked() {
-			b.navigate(item.link)
-		}
+	t := scope.Theme()
+	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(10).Padding(6, 8).Radius(6).Background(t.Surface).Children(func() {
+		b.drawThumbnail(scope, item.thumbnail)
+		ui.Column(scope).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Start).Children(func() {
+			title := ui.Button(scope, "").Label(item.title).Tooltip(item.title).FillWidth().MinWidth(0).Justify(ui.Start).Children(func() {
+				ui.Text(scope, item.title).Wrap().MaxLines(2)
+			})
+			if title.Clicked() {
+				b.navigate(item.link)
+			}
+			if item.summary != "" {
+				ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(t.TextMuted).FontSize(12).Wrap().MaxLines(2)
+			}
+		})
 		if item.owner != "" && kind != screenUser && ui.Button(scope, "投稿者").Clicked() {
 			b.navigate(item.owner)
 		}
-		if item.summary != "" {
-			ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(scope.Theme().TextMuted)
-		}
 	})
+}
+
+func (b *browser) drawThumbnail(scope *ui.Context, target string) {
+	width := float32(112)
+	if w, _ := scope.Size(); w < 900 {
+		width = 84
+	}
+	height := width * 9 / 16
+	t := scope.Theme()
+	if b.thumbnails != nil {
+		if img := b.thumbnails.image(target); img != nil {
+			ui.Image(scope, img).Size(width, height).Fit(ui.Contain).Background(t.Background).Radius(4)
+			return
+		}
+	}
+	ui.Box(scope).Size(width, height).Radius(4).Background(t.Background).Border(1, t.Border)
 }

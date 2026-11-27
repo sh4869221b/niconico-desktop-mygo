@@ -42,23 +42,23 @@ func TestAccountSearchAndGuestFallback(t *testing.T) {
 			})
 			c.http.Transport = requestFunc(func(r *http.Request) (*http.Response, error) {
 				requests++
-				if r.URL.Host == apiHost {
-					q := r.URL.Query()
-					if r.Method != http.MethodGet || r.URL.Path != accountSearchPath || q.Get(tc.key) != "a/b" ||
-						q.Get("page") != "3" || q.Get("sortKey") != "viewCount" || q.Get("sortOrder") != "asc" ||
-						r.Header.Get("Cookie") != "user_session=fixture" {
-						t.Fatal("unexpected authenticated request")
-					}
-					resp := testResponse(tc.status, `{"meta":{"status":200},"data":{"items":[{"id":"sm9","title":"test"}],"hasNext":true}}`)
-					if tc.status == 302 {
-						resp.Header.Set("Location", "https://example.invalid/")
-					}
-					return resp, nil
+				q := r.URL.Query()
+				if r.Method != http.MethodGet || r.URL.Host != apiHost || r.URL.Path != accountSearchPath || q.Get(tc.key) != "a/b" ||
+					q.Get("page") != "3" || q.Get("pageSize") != "32" || q.Get("sortKey") != "viewCount" || q.Get("sortOrder") != "asc" {
+					t.Fatalf("unexpected search request: %s", r.URL)
 				}
-				if r.URL.Host != "snapshot.search.nicovideo.jp" || r.Header.Get("Cookie") != "" {
-					t.Fatal("cookie left the allowed endpoint")
+				status, wantCookie := 200, ""
+				if requests == 1 && tc.logged {
+					status, wantCookie = tc.status, "user_session=fixture"
 				}
-				return testResponse(200, `{"meta":{"status":200,"totalCount":120},"data":[{"contentId":"sm9","title":"test"}]}`), nil
+				if r.Header.Get("Cookie") != wantCookie {
+					t.Fatal("unexpected search cookie")
+				}
+				resp := testResponse(status, `{"meta":{"status":200},"data":{"items":[{"id":"sm9","title":"test"}],"hasNext":true}}`)
+				if status == 302 {
+					resp.Header.Set("Location", "https://example.invalid/")
+				}
+				return resp, nil
 			})
 			p, err := c.search(context.Background(), route)
 			if requests != tc.calls || reads != 1 || p.searchMode != tc.want || ((err != nil) != (tc.want == "")) {

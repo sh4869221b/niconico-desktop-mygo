@@ -28,10 +28,12 @@ type browser struct {
 	commentLanguageWarning       bool
 	data                         library
 	history, loaded, closed      bool
+	showLibrary                  bool
 	session                      *mygo.Session
 	official, openingOfficial    bool
 	officialTarget               string
 	catalog                      catalog
+	thumbnails                   *thumbnails
 	navigation                   []screenRoute
 	index                        int
 	result                       catalogPage
@@ -48,7 +50,7 @@ type browser struct {
 
 func main() {
 	mygo.App.SetName(appName)
-	b := &browser{index: -1}
+	b := &browser{index: -1, showLibrary: true}
 	initial := home
 	if len(os.Args) > 1 && allowedURL(os.Args[1]) != nil {
 		initial = os.Args[1]
@@ -78,12 +80,17 @@ func (b *browser) start(initial string) {
 		b.storeWarning = "保存先を取得できません。"
 	}
 	b.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 1000, MinHeight: 600,
+		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
 	b.session = mygo.NewSession("niconico-desktop-mygo")
 	b.catalog = newCatalog(func(target string) (*http.Cookie, error) {
 		return readSessionCookie(b.session.Cookies.List, target, time.Now())
+	})
+	b.thumbnails = newThumbnails(func() {
+		if !b.closed {
+			b.win.Invalidate()
+		}
 	})
 	b.win.OnClosed(func() {
 		b.closed = true
@@ -306,7 +313,7 @@ func (b *browser) pinCurrent() {
 		return
 	}
 	b.data.Pins = putFirst(b.data.Pins, e, 500)
-	b.history = false
+	b.history, b.showLibrary = false, true
 	if b.persist() {
 		b.status = e.Kind + "を登録しました。"
 	}
@@ -347,13 +354,15 @@ func (b *browser) copyCurrent() {
 
 func (b *browser) draw(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().Background(t.Surface).Children(func() {
+	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
 		if b.showPlaybackSettings {
 			b.drawPlaybackSettings(c)
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			b.sidebar(c)
+			if b.showLibrary {
+				b.sidebar(c)
+			}
 			if !b.official {
 				b.drawNative(c)
 			} else if b.web != nil {
@@ -364,15 +373,19 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		ui.Row(c).FillWidth().Padding(5, 12).Gap(12).Children(func() {
-			ui.Text(c, b.status).TextColor(t.TextMuted)
-			if b.official && b.commentLanguageWarning {
-				ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted)
-			}
-			if b.storeWarning != "" {
-				ui.Text(c, b.storeWarning).TextColor(t.TextMuted)
-			}
-		})
+		if b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
+				if b.status != "" {
+					ui.Text(c, b.status).TextColor(t.TextMuted).Wrap()
+				}
+				if b.official && b.commentLanguageWarning {
+					ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted).Wrap()
+				}
+				if b.storeWarning != "" {
+					ui.Text(c, b.storeWarning).TextColor(t.TextMuted).Wrap()
+				}
+			})
+		}
 	})
 }
 
@@ -381,73 +394,85 @@ func (b *browser) toolbar(c *ui.Context) {
 	if b.official && b.web != nil {
 		p = b.web.Page()
 	}
-	ui.Row(c).FillWidth().Gap(6).Padding(8, 10).AlignItems(ui.Center).Children(func() {
-		back := b.official || b.index > 0
-		forward := p != nil && p.CanGoForward() || !b.official && b.index+1 < len(b.navigation)
-		if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
-			if p != nil && p.CanGoBack() {
-				p.GoBack()
-			} else if b.official {
+	t := c.Theme()
+	ui.Column(c).FillWidth().Gap(6).Padding(8, 10).Background(t.Surface).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			back := b.official || b.index > 0
+			forward := p != nil && p.CanGoForward() || !b.official && b.index+1 < len(b.navigation)
+			if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
+				if p != nil && p.CanGoBack() {
+					p.GoBack()
+				} else if b.official {
+					b.leaveOfficial()
+				} else {
+					b.moveNative(-1)
+				}
+			}
+			if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
+				if p != nil {
+					p.GoForward()
+				} else {
+					b.moveNative(1)
+				}
+			}
+			if ui.Button(c, "更新").Clicked() || c.Shortcut(0, ui.KeyF5) {
+				if p != nil {
+					b.loading()
+					p.Reload()
+				} else if b.official {
+					go mygo.RunOnMain(b.attachOfficial)
+				} else {
+					b.refreshNative()
+				}
+			}
+			if ui.Button(c, "ホーム").Clicked() {
+				b.navigate(home)
+			}
+			input := ui.TextInput(c, &b.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
+			if c.Shortcut(ui.Ctrl, ui.KeyL) {
+				input.Focus()
+			}
+			if ui.PrimaryButton(c, "検索").Clicked() || input.Submitted() {
+				b.search(false)
+			}
+			if ui.Button(c, "タグ検索").Clicked() {
+				b.search(true)
+			}
+		})
+		ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+			if b.official && ui.Button(c, "独自UIに戻る").Clicked() {
 				b.leaveOfficial()
-			} else {
-				b.moveNative(-1)
 			}
-		}
-		if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
-			if p != nil {
-				p.GoForward()
-			} else {
-				b.moveNative(1)
+			if ui.Button(c, "登録・履歴").Checked(b.showLibrary).Clicked() {
+				b.showLibrary = !b.showLibrary
 			}
-		}
-		if ui.Button(c, "更新").Clicked() || c.Shortcut(0, ui.KeyF5) {
-			if p != nil {
-				b.loading()
-				p.Reload()
-			} else if b.official {
-				go mygo.RunOnMain(b.attachOfficial)
-			} else {
-				b.refreshNative()
+			if ui.Button(c, "マイリスト").Clicked() {
+				b.navigate(mylists)
 			}
-		}
-		if ui.Button(c, "ホーム").Clicked() {
-			b.navigate(home)
-		}
-		if b.official && ui.Button(c, "独自UIに戻る").Clicked() {
-			b.leaveOfficial()
-		}
-		input := ui.TextInput(c, &b.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・URL").Grow(1).MinWidth(120)
-		if c.Shortcut(ui.Ctrl, ui.KeyL) {
-			input.Focus()
-		}
-		if ui.PrimaryButton(c, "検索").Clicked() || input.Submitted() {
-			b.search(false)
-		}
-		if ui.Button(c, "タグ検索").Clicked() {
-			b.search(true)
-		}
-		saved, _ := canonical(b.current())
-		if ui.Button(c, "☆ 登録").Disabled(saved == "").Clicked() {
-			b.pinCurrent()
-		}
-		if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
-			b.copyCurrent()
-		}
-		if ui.Button(c, "マイリスト").Clicked() {
-			b.navigate(mylists)
-		}
-		if ui.Button(c, "設定").Clicked() {
-			b.showPlaybackSettings = !b.showPlaybackSettings
-		}
-		if ui.Button(c, "ログイン").Clicked() {
-			b.navigate(login)
-		}
+			saved, _ := canonical(b.current())
+			if ui.Button(c, "☆ 登録").Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
+				b.pinCurrent()
+			}
+			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
+				b.copyCurrent()
+			}
+			if ui.Button(c, "設定").Clicked() {
+				b.showPlaybackSettings = !b.showPlaybackSettings
+			}
+			if ui.Button(c, "ログイン").Clicked() {
+				b.navigate(login)
+			}
+		})
 	})
 }
 
 func (b *browser) sidebar(c *ui.Context) {
-	ui.Column(c).Width(218).Padding(10).Gap(8).Children(func() {
-		ui.Text(c, "NICONICO DESKTOP").Bold()
+	width, _ := c.Size()
+	sidebarWidth := float32(218)
+	if width < 900 {
+		sidebarWidth = 174
+	}
+	ui.Column(c).Width(sidebarWidth).Background(c.Theme().Surface).Padding(10).Gap(8).Children(func() {
 		ui.Row(c).Gap(5).Children(func() {
 			if ui.Button(c, "登録済み").Disabled(!b.history).Clicked() {
 				b.history = false
@@ -461,7 +486,7 @@ func (b *browser) sidebar(c *ui.Context) {
 			items = b.data.History
 		}
 		if len(items) == 0 {
-			ui.Text(c, "表示する項目はありません。").Wrap()
+			ui.Text(c, "表示する項目はありません。").TextColor(c.Theme().TextMuted).Wrap()
 			return
 		}
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {

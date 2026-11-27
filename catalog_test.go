@@ -74,7 +74,7 @@ func TestRouteTargetsAndSavedIdentity(t *testing.T) {
 		if r.kind != screenSearch || r.page != 2 || r.target != input || r.link != base+"?order=a&sort=v" {
 			t.Errorf("search route = %+v", r)
 		}
-		if p := searchParameters(r); p.Get("_offset") != "48" || p.Get("_sort") != "+viewCounter" {
+		if p := searchParameters(r); p.Get("_offset") != "64" || p.Get("_sort") != "+viewCounter" {
 			t.Errorf("snapshot search = %v", p)
 		}
 		if p := accountSearchParameters(r); p.Get("page") != "3" || p.Get("sortKey") != "viewCount" {
@@ -195,8 +195,8 @@ func TestNativeCatalog(t *testing.T) {
 		route, path, response, title, first string
 		more                                bool
 	}{
-		{home + "tag/%E7%8C%AB", "/api/v2/snapshot/video/contents/search",
-			`{"meta":{"status":200,"totalCount":25},"data":[{"contentId":"sm9","title":"検索結果","lengthSeconds":75,"viewCounter":123}]}`, "猫", home + "watch/sm9", true},
+		{home + "tag/%E7%8C%AB", accountSearchPath,
+			`{"meta":{"status":200},"data":{"hasNext":true,"items":[{"id":"sm9","title":"検索結果","duration":75,"count":{"view":123}}]}}`, "猫", home + "watch/sm9", true},
 		{home + "user/123/video", "/v3/users/123/videos", `{"meta":{"status":200},"data":{"totalCount":1,"items":[{"essential":{"id":"sm9","title":"動画","owner":{"id":"123","ownerType":"user","name":"投稿者"}}}]}}`, "投稿者 の投稿動画", home + "watch/sm9", false},
 		{home + "user/123/mylist", "/v1/users/123/mylists", `{"meta":{"status":200},"data":{"mylists":[{"id":4,"name":"private"},{"id":3,"name":"public","isPublic":true}]}}`, "公開マイリスト", home + "mylist/3", false},
 		{home + "mylist/3", "/v2/mylists/3", `{"meta":{"status":200},"data":{"mylist":{"name":"公開 3","hasNext":true,"items":[{"watchId":"sm9","video":{"id":"sm9","title":"動画"}}]}}}`, "公開 3", home + "watch/sm9", true},
@@ -219,7 +219,7 @@ func TestNativeCatalog(t *testing.T) {
 				if r.Method != http.MethodGet || r.URL.Path != v.path || (r.Header.Get("Cookie") != "") != private {
 					t.Errorf("unexpected request to %s or auth state", r.URL.Path)
 				}
-				if routeFor(v.route).kind == screenSearch && (r.URL.Query().Get("targets") != "tagsExact" || r.URL.Query().Get("q") != "猫" || r.URL.Query().Get("_sort") != "-startTime") {
+				if routeFor(v.route).kind == screenSearch && (r.URL.Query().Get("tag") != "猫" || r.URL.Query().Get("sortKey") != "hot" || r.URL.Query().Get("sortOrder") != "none") {
 					t.Error(r.URL.RawQuery)
 				}
 				return testResponse(200, v.response), nil

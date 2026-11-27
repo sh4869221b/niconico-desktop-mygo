@@ -21,7 +21,7 @@ const apiHost = "nvapi.nicovideo.jp"
 const pageSize = 24
 const userVideoPageSize = 100
 const publicMylistPageSize = 100
-const maxCatalogPage = 4166 // zero based, within the snapshot API's 100,000 results
+const maxCatalogPage = 4166 // zero based, preserves the accepted range of existing browse links
 const responseLimit = 4 << 20
 
 var errSignIn = errors.New("ニコニコへのログインが必要です")
@@ -142,13 +142,6 @@ func desktopListPage(u *url.URL) (int, bool) {
 	return pageIndex(query.Get("page"))
 }
 
-// Only route searches whose query can be applied by both search APIs.
-var searchSorts = map[string]struct{ snapshot, account string }{
-	"f": {"startTime", "registeredAt"}, "v": {"viewCounter", "viewCount"},
-	"r": {"lastCommentTime", "lastCommentTime"}, "m": {"mylistCounter", "mylistCount"},
-	"n": {"commentCounter", "commentCount"}, "l": {"lengthSeconds", "duration"},
-}
-
 func nativeSearchPage(u *url.URL) (int, bool) {
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
@@ -167,7 +160,7 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 				return 0, false
 			}
 		case "sort":
-			if _, ok := searchSorts[value]; !ok {
+			if _, ok := findSearchSort(value); !ok || value == "" {
 				return 0, false
 			}
 		case "order":
@@ -179,15 +172,6 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 		}
 	}
 	return page, true
-}
-
-func searchSort(u *url.URL) (sort, order string) {
-	q := u.Query()
-	sort = q.Get("sort")
-	if sort == "" {
-		sort = "f"
-	}
-	return sort, q.Get("order")
 }
 
 func (r screenRoute) withPage(page int) screenRoute {
@@ -222,7 +206,7 @@ func (r screenRoute) startTime() time.Duration {
 }
 
 type card struct {
-	link, title, summary, owner string
+	link, title, summary, owner, thumbnail string
 }
 
 type catalogPage struct {
@@ -330,35 +314,40 @@ func searchParameters(r screenRoute) url.Values {
 	if strings.HasPrefix(u.Path, "/tag/") {
 		targets = "tagsExact"
 	}
-	sort, order := searchSort(u)
+	sort, ascending := r.searchSort()
 	direction := "-"
-	if order == "a" {
+	if ascending {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
-		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter"},
-		"_sort":  {direction + searchSorts[sort].snapshot}, "_limit": {strconv.Itoa(pageSize)}, "_offset": {strconv.Itoa(r.page * pageSize)},
+		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl"},
+		"_sort":  {direction + sort.snapshotKey}, "_limit": {strconv.Itoa(searchPageSize)}, "_offset": {strconv.Itoa(r.page * searchPageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
 
 func (c catalog) search(ctx context.Context, r screenRoute) (catalogPage, error) {
 	if c.session != nil {
-		result, err := c.accountSearch(ctx, r)
+		result, err := c.accountSearch(ctx, r, true)
 		if !errors.Is(err, errSignIn) {
 			return result, err
 		}
 	}
-	return c.publicSearch(ctx, r)
+	result, err := c.accountSearch(ctx, r, false)
+	sort, _ := r.searchSort()
+	if err != nil && ctx.Err() == nil && sort.snapshotKey != "" && r.page*searchPageSize < snapshotResultLimit {
+		return c.publicSearch(ctx, r)
+	}
+	return result, err
 }
 
 func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, error) {
 	data, err := c.request(ctx, "snapshot.search.nicovideo.jp", "/api/v2/snapshot/video/contents/search", searchParameters(r), false)
-	p := catalogPage{title: r.key, searchMode: "公開検索"}
+	p := catalogPage{title: r.key, searchMode: "スナップショット検索"}
 	if err != nil {
 		return p, err
 	}
 	type row struct {
-		ContentID, Title                           string
+		ContentID, Title, ThumbnailURL             string
 		LengthSeconds, ViewCounter, CommentCounter int
 	}
 	result, err := decodeJSON[struct {
@@ -368,9 +357,10 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	if err != nil || result.Meta.Status != 200 || result.Data == nil {
 		return p, errors.New("検索結果を取得できませんでした")
 	}
-	p.more = (r.page+1)*pageSize < min(result.Meta.TotalCount, 100000)
+	p.more = (r.page+1)*searchPageSize < min(result.Meta.TotalCount, snapshotResultLimit)
 	for _, item := range result.Data {
 		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
+			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
 			p.items = append(p.items, v)
 		}
 	}
@@ -378,14 +368,28 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 }
 
 type apiVideo struct {
-	ID, Title string
-	Duration  int
-	Count     struct{ View, Comment int }
-	Owner     struct{ ID, Name, OwnerType string }
+	ID, Title               string
+	Duration                int
+	Count                   struct{ View, Comment int }
+	Owner                   struct{ ID, Name, OwnerType string }
+	Thumbnail               struct{ URL, MiddleURL, ListingURL string }
+	RequireSensitiveMasking bool
+}
+
+func (v apiVideo) thumbnailURL() string {
+	if !v.RequireSensitiveMasking {
+		for _, raw := range []string{v.Thumbnail.ListingURL, v.Thumbnail.MiddleURL, v.Thumbnail.URL} {
+			if target := normalizeThumbnailURL(raw); target != "" {
+				return target
+			}
+		}
+	}
+	return ""
 }
 
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
+	x.thumbnail = v.thumbnailURL()
 	if numeric(v.Owner.ID, 9) && v.Owner.OwnerType == "user" {
 		x.owner = home + "user/" + v.Owner.ID + "/video"
 	}
@@ -430,6 +434,9 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 	} else if r.kind == screenList {
 		// Omitting sortKey and sortOrder uses the list owner's default, as in the official page.
 		query.Set("sensitiveContents", "mask")
+	} else if directory {
+		query.Set("sampleItemCount", "1")
+		query.Set("sensitiveContents", "mask")
 	}
 	data, err := c.request(ctx, apiHost, path, query, private)
 	if err != nil {
@@ -446,10 +453,11 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 			HasNext    *bool
 			Items      []row
 			Mylists    []struct {
-				ID         int64
-				Name       string
-				IsPublic   bool
-				ItemsCount int
+				ID          int64
+				Name        string
+				IsPublic    bool
+				ItemsCount  int
+				SampleItems []row
 			}
 			Mylist *struct {
 				Name, Description string
@@ -480,7 +488,13 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 			if !list.IsPublic {
 				label = "非公開"
 			}
-			p.items = append(p.items, card{link: link, title: list.Name, summary: fmt.Sprintf("%s  ·  %d 件", label, list.ItemsCount)})
+			item := card{link: link, title: list.Name, summary: fmt.Sprintf("%s  ·  %d 件", label, list.ItemsCount)}
+			for _, sample := range list.SampleItems {
+				if item.thumbnail = sample.Video.thumbnailURL(); item.thumbnail != "" {
+					break
+				}
+			}
+			p.items = append(p.items, item)
 		}
 		return p, nil
 	}
