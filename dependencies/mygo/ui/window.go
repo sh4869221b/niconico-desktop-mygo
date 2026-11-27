@@ -505,7 +505,16 @@ func (h *windowHost) present(s *scene.Scene) {
 	h.armIdle(frameIdle)
 	h.useWide(s, now)
 	defer h.ready()
-	if h.render(s) {
+	var startup *videoEngine
+	if !h.occluded() {
+		for _, v := range h.rt.videos {
+			if v.preparing != nil && v.startImage != nil {
+				startup = v
+				break
+			}
+		}
+	}
+	if h.render(s, startup) {
 		h.path = "drawn on the GPU"
 		if h.degraded {
 			h.path = "drawn by the GPU renderer in software"
@@ -521,6 +530,14 @@ func (h *windowHost) present(s *scene.Scene) {
 		h.conn.Surface.PresentPixels(m.Pix, m.Stride, m.W, m.H)
 	}
 	h.refreshPresented()
+	if startup != nil {
+		for _, op := range s.Ops {
+			if op.Image == startup.startImage && op.Rect.W > 0 && op.Rect.H > 0 && op.Image.Pixels() != nil {
+				startup.presentedStart()
+				break
+			}
+		}
+	}
 }
 
 // ready tells the surface, after the first frame, that the frame reached
@@ -604,10 +621,21 @@ func (h *windowHost) screenWide() bool {
 // that fails too, frames are drawn in memory until a later try. A frame
 // the GPU did not finish in time is the exception: the driver is wedged,
 // so it is drawn in memory and the GPU left alone until the wait is over.
-func (h *windowHost) render(s *scene.Scene) bool {
+func (h *windowHost) render(s *scene.Scene, startup *videoEngine) bool {
 	for try := 0; h.gpu != nil; try++ {
 		g := h.gpu
-		err := g.Render(s)
+		var err error
+		if r, ok := g.(interface {
+			RenderStart(*scene.Scene, uint64) (bool, error)
+		}); ok && startup != nil {
+			var shown bool
+			shown, err = r.RenderStart(s, startup.startImage.ID())
+			if shown && err == nil {
+				startup.presentedStart()
+			}
+		} else {
+			err = g.Render(s)
+		}
 		if err == nil {
 			return true
 		}

@@ -26,6 +26,7 @@ type mediaTrack struct {
 }
 type watchData struct {
 	Video  struct{ ID, Title, Description string }
+	Tags   *struct{ Items []struct{ Name string } }
 	Client struct{ WatchTrackID string }
 	Media  struct {
 		Domand struct {

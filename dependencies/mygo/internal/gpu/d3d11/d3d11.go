@@ -281,7 +281,10 @@ type canvasTexture struct {
 
 // Renderer draws scenes into a window.
 type Renderer struct {
-	hwnd uintptr
+	// A startup video is silent until the renderer presents this image.
+	startImage                       uint64
+	startImageDrawn, startImageShown bool
+	hwnd                             uintptr
 	// dev is the device the renderers share (shared.go), whose objects
 	// device, ctx, ctx1, factory, the shaders, the input layout, the states
 	// and classes are, held by dev, never released by the renderer.
@@ -914,7 +917,10 @@ func (r *Renderer) syncAtlas(t *texture, a *scene.Atlas, format uint32) error {
 
 // imageView returns the texture view of an image, uploading it when new or
 // changed.
-func (r *Renderer) imageView(img *scene.Image) uintptr {
+func (r *Renderer) imageView(img *scene.Image) (view uintptr) {
+	if r.startImage != 0 && img.ID() == r.startImage {
+		defer func() { r.startImageDrawn = r.startImageDrawn || view != 0 }()
+	}
 	if img.Scene != nil {
 		// A canvas, drawn before the scene showing it.
 		if c := r.canvases[img.ID()]; c != nil {
@@ -963,6 +969,15 @@ func (r *Renderer) imageView(img *scene.Image) uintptr {
 	return t.srv
 }
 
+// RenderStart records a successful present of this particular video image.
+// A deferred or occluded frame leaves the caller's audio gate closed.
+func (r *Renderer) RenderStart(s *scene.Scene, image uint64) (bool, error) {
+	r.startImage, r.startImageDrawn, r.startImageShown = image, false, false
+	err := r.Render(s)
+	r.startImage = 0
+	return r.startImageShown, err
+}
+
 // Render draws s into the window and presents it.
 func (r *Renderer) Render(s *scene.Scene) error {
 	if r.dev.replaced() {
@@ -996,6 +1011,10 @@ func (r *Renderer) Render(s *scene.Scene) error {
 		return nil
 	}
 	r.afterAside, r.asideDone = r.asideDone, ""
+	if r.startImage != 0 {
+		// A pending/backed-off present may have missed the earlier draw.
+		r.held = false
+	}
 	resized := r.swapChain != 0 && (s.Width != r.w || s.Height != r.h)
 	drawn, err := r.drawFrame(s)
 	r.recovering = r.uncapped && !r.resizing && r.gaveUp
@@ -1033,7 +1052,7 @@ func (r *Renderer) Render(s *scene.Scene) error {
 		}
 		r.waitComposed()
 		return nil
-	} else if r.presentLater != nil {
+	} else if r.presentLater != nil && r.startImage == 0 {
 		r.cost.read(r.ctx)
 		if r.cost.fits() && r.lat.ready() {
 			// It shows at the next composition, and the next frame builds
@@ -1885,6 +1904,9 @@ func (r *Renderer) show(sync uintptr) error {
 	// window made hidden, may not be what the window shows once it does:
 	// the next frame draws whole.
 	r.held = r.ctx1 != 0 && uint32(hr) != dxgiStatusOccluded
+	if r.startImage != 0 && r.startImageDrawn && uint32(hr) != dxgiStatusOccluded {
+		r.startImageShown = true
+	}
 	if r.gaveUp && !r.resizing && r.refused == 0 {
 		// DXGI took a frame at once, the swap chain settled: frames
 		// present uncapped again (uncapped.go).

@@ -95,6 +95,8 @@ const (
 
 	engineGetError            = 3
 	engineSetSource           = 6
+	engineSetPreload          = 10
+	engineGetReadyState       = 14
 	engineIsSeeking           = 15
 	engineGetCurrentTime      = 16
 	engineSetCurrentTime      = 17
@@ -108,6 +110,7 @@ const (
 	enginePause               = 33
 	engineSetMuted            = 35
 	engineSetVolume           = 37
+	engineHasVideo            = 38
 	engineGetNativeVideoSize  = 40
 	engineShutdown            = 42
 	engineTransferVideoFrame  = 43
@@ -145,6 +148,7 @@ const (
 	eventDurationChange = 21
 
 	eventFrameStepCompleted = 1007
+	eventFirstFrameReady    = 1009
 )
 
 type texture2DDesc struct {
@@ -248,17 +252,20 @@ type mfEngine struct {
 
 	// ring are the shared textures the engine converts pictures into:
 	// shown the one Frame last returned, -1 for none.
-	ring  [ringSize]sharedFrame
-	shown int
-	w, h  int
+	ring      [ringSize]sharedFrame
+	shown     int
+	w, h      int
+	start     *mfStart
+	userMuted bool
 
-	mu        sync.Mutex
-	wake      func()
-	state     media.State
-	err       error
-	loop      bool
-	seekTo    time.Duration
-	seekSince time.Time // a seek not landed yet, until eventSeeked
+	mu         sync.Mutex
+	wake       func()
+	state      media.State
+	err        error
+	loop       bool
+	seekTo     time.Duration
+	seekSince  time.Time // a seek not landed yet, until eventSeeked
+	seekEvents uint64
 	// landed tells a seek landed (eventSeeked) with no picture since
 	// it, for Frame to step to the picture there if the engine has none.
 	landed bool
@@ -413,9 +420,10 @@ func (e *mfEngine) event(event uint32, param1 uintptr, param2 uint32) {
 			e.state = media.Ready
 		}
 	case eventSeeked:
+		e.seekEvents++
 		e.seekSince = time.Time{}
 		e.landed = true
-	case eventLoadedMetadata, eventLoadedData, eventDurationChange, eventFrameStepCompleted:
+	case eventLoadedMetadata, eventLoadedData, eventDurationChange, eventFrameStepCompleted, eventFirstFrameReady:
 	default:
 		e.mu.Unlock()
 		return
@@ -434,6 +442,9 @@ func (e *mfEngine) SetWake(wake func()) {
 }
 
 func (e *mfEngine) Frame(time.Time) (media.Picture, bool, bool) {
+	if e.start != nil {
+		return e.startFrame()
+	}
 	changed := false
 	var pts int64
 	fresh := call(e.engine, engineOnVideoStreamTick, uintptr(unsafe.Pointer(&pts))) == 0 // S_OK: a new picture
@@ -453,21 +464,31 @@ func (e *mfEngine) Frame(time.Time) (media.Picture, bool, bool) {
 		}
 	}
 	if fresh {
-		var w, h uint32
-		call(e.engine, engineGetNativeVideoSize, uintptr(unsafe.Pointer(&w)), uintptr(unsafe.Pointer(&h)))
-		if w > 0 && h > 0 {
-			i := (e.shown + 1) % ringSize
-			if e.transfer(i, int(w), int(h)) {
-				e.shown, changed = i, true
-				e.w, e.h = int(w), int(h)
-				e.mu.Lock()
-				if e.state == media.Loading {
-					e.state = media.Ready
-				}
-				e.mu.Unlock()
-			}
-		}
+		changed = e.captureFrame()
 	}
+	return e.picture(changed)
+}
+
+func (e *mfEngine) captureFrame() bool {
+	var w, h uint32
+	call(e.engine, engineGetNativeVideoSize, uintptr(unsafe.Pointer(&w)), uintptr(unsafe.Pointer(&h)))
+	if w == 0 || h == 0 {
+		return false
+	}
+	i := (e.shown + 1) % ringSize
+	if !e.transfer(i, int(w), int(h)) {
+		return false
+	}
+	e.shown, e.w, e.h = i, int(w), int(h)
+	e.mu.Lock()
+	if e.state == media.Loading {
+		e.state = media.Ready
+	}
+	e.mu.Unlock()
+	return true
+}
+
+func (e *mfEngine) picture(changed bool) (media.Picture, bool, bool) {
 	if e.shown < 0 {
 		return media.Picture{}, false, false
 	}
@@ -609,6 +630,9 @@ func (e *mfEngine) Duration() time.Duration {
 }
 
 func (e *mfEngine) Position() time.Duration {
+	if e.start != nil {
+		return e.start.target
+	}
 	e.mu.Lock()
 	if !e.seekSince.IsZero() {
 		d := e.seekTo
@@ -632,7 +656,11 @@ func (e *mfEngine) Play() {
 	call(e.engine, enginePlay)
 }
 
-func (e *mfEngine) Pause() { call(e.engine, enginePause) }
+func (e *mfEngine) Pause() {
+	if e.start == nil {
+		call(e.engine, enginePause)
+	}
+}
 
 func (e *mfEngine) Seek(d time.Duration) {
 	e.mu.Lock()
@@ -658,7 +686,10 @@ func (e *mfEngine) SetRate(r float64) {
 
 func (e *mfEngine) SetVolume(v float64) { callSetDouble(e.engine, engineSetVolume, v) }
 
-func (e *mfEngine) SetMuted(m bool) { call(e.engine, engineSetMuted, boolArg(m)) }
+func (e *mfEngine) SetMuted(m bool) {
+	e.userMuted = m
+	call(e.engine, engineSetMuted, boolArg(m || e.start != nil))
+}
 
 func boolArg(b bool) uintptr {
 	if b {

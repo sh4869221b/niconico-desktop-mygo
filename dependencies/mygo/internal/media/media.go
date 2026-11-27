@@ -53,6 +53,14 @@ type Engine interface {
 	Close() error
 }
 
+// StartPreparer is implemented by engines that can prepare an exact initial
+// position without audible playback. Frame returns no picture until that
+// position is ready, then holds it until PresentStart.
+type StartPreparer interface {
+	PrepareStart(time.Duration)
+	PresentStart()
+}
+
 // A Picture is a frame of video where the engine left it.
 type Picture struct {
 	Surface *scene.Surface

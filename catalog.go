@@ -211,6 +211,7 @@ type catalogPage struct {
 	searchMode             string
 	items, links           []card
 	description            []descriptionPart
+	tags                   []string
 	more                   bool
 }
 
@@ -550,6 +551,10 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 			Description  string `xml:"description"`
 			UserID       string `xml:"user_id"`
 			UserNickname string `xml:"user_nickname"`
+			Tags         []struct {
+				Domain string   `xml:"domain,attr"`
+				Items  []string `xml:"tag"`
+			} `xml:"tags"`
 		} `xml:"thumb"`
 	}
 	if err := xml.Unmarshal(data, &result); err != nil || result.Status != "ok" || result.Thumb.Title == "" {
@@ -559,6 +564,13 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 		return p, errors.New("指定した動画と異なる動画情報を受け取りました")
 	}
 	p.title = result.Thumb.Title
+	for _, group := range result.Thumb.Tags {
+		if group.Domain == "jp" || group.Domain == "" {
+			for _, name := range group.Items {
+				p.tags = addVideoTag(p.tags, name)
+			}
+		}
+	}
 	p.summary, p.links, p.description = plainDescription(result.Thumb.Description)
 	if numeric(result.Thumb.UserID, 9) {
 		p.author = result.Thumb.UserNickname

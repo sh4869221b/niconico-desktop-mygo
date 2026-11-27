@@ -342,6 +342,10 @@ func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
 }
 
 func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
+	if b.navigation[b.index].kind == screenVideo {
+		ui.Text(scope, "タグ").Bold()
+		b.drawVideoTags(scope, p.tags, "タグはありません。")
+	}
 	if p.author != "" {
 		ui.Text(scope, p.author).TextColor(scope.Theme().TextMuted).Wrap()
 	}
@@ -364,7 +368,7 @@ func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
 func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card) {
 	t := scope.Theme()
 	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(10).Padding(6, 8).Radius(6).Background(t.Surface).Children(func() {
-		b.drawThumbnail(scope, item.thumbnail)
+		b.drawThumbnail(scope.Key(item.link), item)
 		ui.Column(scope).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Start).Children(func() {
 			title := ui.Button(scope, "").Label(item.title).Tooltip(item.title).FillWidth().MinWidth(0).Justify(ui.Start).Children(func() {
 				ui.Text(scope, item.title).Wrap().MaxLines(2)
@@ -382,18 +386,57 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 	})
 }
 
-func (b *browser) drawThumbnail(scope *ui.Context, target string) {
+type thumbnailPress struct {
+	x, y     float32
+	canceled bool
+}
+
+func (press *thumbnailPress) input(ev ui.InputEvent) bool {
+	switch ev.Kind {
+	case ui.InputPointerDown:
+		if ev.Button == 0 {
+			*press = thumbnailPress{x: ev.X, y: ev.Y, canceled: ev.Clicks > 1}
+		}
+	case ui.InputPointerMove, ui.InputPointerUp:
+		if ev.Button == 0 {
+			dx, dy := ev.X-press.x, ev.Y-press.y
+			press.canceled = press.canceled || ev.Canceled || dx*dx+dy*dy > 36
+		}
+	case ui.InputScroll:
+		press.canceled = true
+	case ui.InputKeyDown:
+		press.canceled = false
+	}
+	return false
+}
+
+func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 	width := float32(112)
 	if w, _ := scope.Size(); w < 900 {
 		width = 84
 	}
 	height := width * 9 / 16
 	t := scope.Theme()
-	if b.thumbnails != nil {
-		if img := b.thumbnails.image(target); img != nil {
-			ui.Image(scope, img).Size(width, height).Fit(ui.Contain).Background(t.Background).Radius(4)
-			return
+	r := routeFor(item.link)
+	label := item.title + " を開く"
+	if r.kind == screenVideo {
+		label = item.title + " を再生"
+	}
+	button := ui.ButtonBase(scope).Size(width, height).Label(label).Tooltip(label).Radius(4).
+		Background(t.Background).Border(1, t.Border).Cursor(ui.CursorPointer)
+	press := ui.Local(button, "thumbnail press", func() thumbnailPress { return thumbnailPress{} })
+	button.HandleInput(press.input).Children(func() {
+		if b.thumbnails != nil {
+			if img := b.thumbnails.image(item.thumbnail); img != nil {
+				ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
+			}
+		}
+	})
+	if button.Clicked() && !press.canceled {
+		if r.kind == screenVideo {
+			b.openPlayer(r.target)
+		} else {
+			b.navigate(item.link)
 		}
 	}
-	ui.Box(scope).Size(width, height).Radius(4).Background(t.Background).Border(1, t.Border)
 }

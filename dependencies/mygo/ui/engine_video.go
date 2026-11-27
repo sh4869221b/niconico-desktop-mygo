@@ -39,6 +39,8 @@ type videoEngine struct {
 	// muted is the player's SetMuted, and shown whether a Video showed
 	// the video yet.
 	muted, shown bool
+	preparing    media.StartPreparer
+	startImage   *scene.Image
 	// rt and frame are the window and its frame that last built the
 	// video, built the frame since which it showed in each.
 	rt    *engine
@@ -117,6 +119,7 @@ func (v *videoEngine) close() {
 		return
 	}
 	v.closed = true
+	v.preparing, v.startImage = nil, nil
 	v.e.SetWake(nil)
 	v.e.Close()
 	v.state = media.Ended
@@ -159,7 +162,7 @@ func (v *videoEngine) advance(c *context, p *VideoPlayer) {
 	// A muted video is a picture, as a background is: it plays only
 	// while some of it shows, and stands still for less motion.
 	occluded := rt.host.occluded()
-	v.hold(v.muted && (occluded || rt.preferences().ReduceMotion))
+	v.hold(v.preparing != nil || v.muted && (occluded || rt.preferences().ReduceMotion))
 	if occluded {
 		// No frame builds until some of the window shows again, but this
 		// one did, as keys typed into a window that another covers build
@@ -177,6 +180,9 @@ func (v *videoEngine) advance(c *context, p *VideoPlayer) {
 		if changed {
 			p.bitmap.showPicture(pic)
 		}
+		if v.preparing != nil {
+			v.startImage = p.bitmap.img
+		}
 		if v.state == media.Loading {
 			// The first picture, which makes the engine ready: it plays
 			// on from this frame, with no wake to come for it.
@@ -188,7 +194,7 @@ func (v *videoEngine) advance(c *context, p *VideoPlayer) {
 	}
 	// Interval only once loaded: an engine may learn the video's rate as
 	// it loads, which AVFoundation would wait for on the main thread.
-	if v.playing() && !v.held && v.state != media.Loading {
+	if v.preparing != nil && v.err == nil || v.playing() && !v.held && v.state != media.Loading {
 		v.askNext(c, p)
 	}
 }
@@ -240,7 +246,17 @@ func (v *videoEngine) unseen() {
 func (v *videoEngine) setMuted(m bool) {
 	v.muted = m
 	v.e.SetMuted(m)
-	if !m && v.shown {
+	if !m && v.shown && v.preparing == nil {
 		v.hold(false)
 	}
+}
+
+func (v *videoEngine) presentedStart() {
+	if v.closed || v.preparing == nil {
+		return
+	}
+	v.preparing.PresentStart()
+	v.preparing, v.startImage = nil, nil
+	v.hold(v.muted && v.rt.preferences().ReduceMotion)
+	v.wakeWindow()
 }

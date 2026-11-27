@@ -68,7 +68,7 @@ func TestBrowseTabsAcrossVirtualRows(t *testing.T) {
 	app := browser{navigation: []screenRoute{r}, result: p}
 	view := ui.NewTester(app.draw, 1000, 600)
 	next := 1
-	for i := 0; i < 160 && next <= len(p.items); i++ {
+	for i := 0; i < 260 && next <= len(p.items); i++ {
 		view.Key(0, ui.KeyTab)
 		if view.Focused(p.items[next-1].title) {
 			next++
@@ -78,8 +78,59 @@ func TestBrowseTabsAcrossVirtualRows(t *testing.T) {
 		t.Fatalf("Tab did not reach item %d", next)
 	}
 	view.Key(ui.Shift, ui.KeyTab)
+	view.Key(ui.Shift, ui.KeyTab)
 	if !view.Focused(p.items[98].title) {
 		t.Fatalf("Shift+Tab did not return to %q", p.items[98].title)
+	}
+}
+
+func TestCatalogThumbnailOpensCorrectVirtualRow(t *testing.T) {
+	r, catalog := browseFixture(screenList, 100)
+	p, err := catalog.load(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := browser{navigation: []screenRoute{r}, result: p, closed: true, playMode: nativePlayback}
+	view := ui.NewTester(app.draw, 960, 620)
+	if err := view.RightClick(p.items[0].title + " を再生"); err != nil {
+		t.Fatal(err)
+	}
+	if app.playbackRequest != 0 {
+		t.Fatal("right-click opened a video")
+	}
+	for range 26 {
+		view.Scroll(550, 340, 0, 460)
+	}
+	if err := view.Click(p.items[99].title + " を再生"); err != nil {
+		t.Fatal(err)
+	}
+	if app.playbackRequest != 1 {
+		t.Fatal("thumbnail did not use the player's opening path")
+	}
+	if app.navigation[app.index] != r {
+		t.Fatal("thumbnail changed the main page")
+	}
+}
+
+func TestThumbnailGestureIgnoresDragAndDoubleClick(t *testing.T) {
+	var press thumbnailPress
+	for _, tc := range []struct {
+		clicks int
+		events []ui.InputEvent
+		cancel bool
+	}{
+		{1, []ui.InputEvent{{Kind: ui.InputPointerUp, X: 2}}, false},
+		{2, []ui.InputEvent{{Kind: ui.InputPointerUp}}, true},
+		{1, []ui.InputEvent{{Kind: ui.InputPointerMove, Y: 12}, {Kind: ui.InputPointerUp}}, true},
+		{1, []ui.InputEvent{{Kind: ui.InputScroll}, {Kind: ui.InputPointerUp}}, true},
+	} {
+		press.input(ui.InputEvent{Kind: ui.InputPointerDown, Clicks: tc.clicks})
+		for _, ev := range tc.events {
+			press.input(ev)
+		}
+		if press.canceled != tc.cancel {
+			t.Errorf("gesture %+v cancellation was %v", tc, press.canceled)
+		}
 	}
 }
 

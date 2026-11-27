@@ -44,8 +44,11 @@ func siteHost(u *url.URL) bool {
 }
 
 func searchURL(mode, query string) string {
-	query = strings.TrimSpace(query)
-	if query == "" || query == "." || query == ".." || utf8.RuneCountInString(query) > 500 ||
+	return exactSearchURL(mode, strings.TrimSpace(query))
+}
+
+func exactSearchURL(mode, query string) string {
+	if strings.TrimSpace(query) == "" || query == "." || query == ".." || utf8.RuneCountInString(query) > 500 ||
 		strings.ContainsFunc(query, unicode.IsControl) {
 		return ""
 	}
@@ -102,7 +105,7 @@ func canonical(raw string) (string, string) {
 		if err != nil {
 			return "", ""
 		}
-		link := searchURL(mode, term)
+		link := exactSearchURL(mode, term)
 		if link == "" {
 			return "", ""
 		}

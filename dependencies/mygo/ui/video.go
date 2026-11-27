@@ -239,6 +239,27 @@ func (p *VideoPlayer) Ready() bool {
 	return true
 }
 
+// PrepareStart asks a newly opened system player to hold the specified
+// start position until its first picture is presented. The desired play,
+// pause and mute states can be changed while it prepares. It reports
+// whether the system engine supports this mode. Call before showing Video.
+func (p *VideoPlayer) PrepareStart(at time.Duration) bool {
+	v := p.eng
+	if v == nil || v.closed || v.shown || v.preparing != nil {
+		return false
+	}
+	preparer, ok := v.e.(media.StartPreparer)
+	if !ok {
+		return false
+	}
+	v.preparing = preparer
+	preparer.PrepareStart(max(0, at))
+	return true
+}
+
+// Preparing reports whether the player's initial picture still awaits presentation.
+func (p *VideoPlayer) Preparing() bool { return p.eng != nil && p.eng.preparing != nil }
+
 // Buffering reports whether a stream waits for data it downloads, as a
 // player shows a spinner for.
 func (p *VideoPlayer) Buffering() bool {
