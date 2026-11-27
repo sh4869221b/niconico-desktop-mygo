@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"image"
 	"path/filepath"
 	"slices"
@@ -139,6 +141,46 @@ func TestNativePlayerPlaybackAndVolumeControls(t *testing.T) {
 	}
 	if stream.Playing() {
 		t.Fatal("playback controls did not work at minimum size")
+	}
+}
+
+func TestNativePlayerKeepsPlayingWithDenseOrFailedComments(t *testing.T) {
+	const commentCount = 15000
+	for _, test := range []struct {
+		name, notice string
+		count        int
+	}{
+		{name: "dense", count: commentCount},
+		{name: "failed", notice: "コメントを取得できませんでした。"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rows := make([]timedComment, test.count)
+			for i := range rows {
+				rows[i] = timedComment{Body: fmt.Sprintf("コメント %d", i), VposMs: int64(i / 100)}
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			stream, err := ui.NewVideoPlayer(danmakuTestVideo{image.NewRGBA(image.Rect(0, 0, 40, 30))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			n := &nativePlayer{cancel: cancel, stream: stream, recorded: true, showComments: true,
+				stagedComments: &nativeCommentData{rows: rows, cues: makeDanmakuCues(rows), notice: test.notice}}
+			p := &playerWindow{native: n}
+			b := &browser{}
+			view := ui.NewTester(func(c *ui.Context) { b.drawPlayer(p, c) }, 960, 560)
+			view.Advance(nativeStartTimeout + time.Second)
+			if n.stream != stream || !stream.Playing() || ctx.Err() != nil || n.status != "" {
+				t.Fatalf("comments stopped playback: %q", n.status)
+			}
+			if len(n.commentRows) != test.count || n.stagedComments != nil || n.commentNotice != test.notice {
+				t.Fatalf("comments did not reach the view: %d rows, %q", len(n.commentRows), n.commentNotice)
+			}
+			if test.notice != "" && !slices.Contains(view.Texts(), test.notice) {
+				t.Fatal("the comment error is missing from the comment panel")
+			}
+		})
 	}
 }
 

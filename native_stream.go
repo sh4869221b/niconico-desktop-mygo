@@ -145,7 +145,7 @@ func nativeStream(ctx context.Context, id string, session *http.Cookie) (nativeS
 	q := url.Values{"actionTrackId": {"AAAAAAAAAA_" + strconv.FormatInt(time.Now().UnixMilli(), 10)}}
 	w, err := streamJSON[watchData](ctx, h, home+"api/watch/"+variant+"/"+id+"?"+q.Encode(), nil, "", nil, session)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("動画情報の取得に失敗しました。 %w", err)
 	}
 	m := w.Media.Domand
 	best := func(xs []mediaTrack) string {
@@ -165,7 +165,7 @@ func nativeStream(ctx context.Context, id string, session *http.Cookie) (nativeS
 	stream, err := streamJSON[struct{ ContentURL string }](ctx, h, "https://"+apiHost+"/v1/watch/"+id+"/access-rights/hls?"+q.Encode(),
 		map[string]any{"outputs": [][2]string{{v, a}}}, "application/json", map[string]string{"X-Access-Right-Key": m.AccessRightKey, "X-Request-With": "https://" + watchHost}, session)
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("HLS 配信許可の取得に失敗しました。 %w", err)
 	}
 	u, err := url.Parse(stream.ContentURL)
 	if err != nil || !deliveryURL(u) || u.Host != deliveryHost {

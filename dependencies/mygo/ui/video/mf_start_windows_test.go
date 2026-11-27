@@ -78,3 +78,19 @@ func TestMediaFoundationStartRejectsStalePictureAndMovingClock(t *testing.T) {
 		t.Fatal("startup frame must belong to the requested paused position")
 	}
 }
+
+func TestMediaFoundationAcceptsTargetFrameBeforeSeekNotification(t *testing.T) {
+	start := mfStart{target: 2 * time.Second, phase: startSeeking}
+	if start.acceptPicture(2, 0, func() bool {
+		t.Fatal("transferred a stale pre-seek frame")
+		return true
+	}) || start.phase != startSeeking {
+		t.Fatal("stale frame completed startup")
+	}
+	if start.acceptPicture(2, 20_000_000, func() bool { return false }) || start.phase != startSeeking {
+		t.Fatal("startup completed before a successful picture transfer")
+	}
+	if !start.acceptPicture(2, 20_000_000, func() bool { return true }) || start.phase != startReady {
+		t.Fatal("discarded a valid target frame while the seeked notification was pending")
+	}
+}

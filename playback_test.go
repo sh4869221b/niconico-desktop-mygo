@@ -112,3 +112,61 @@ func TestHLSRelayAuthorization(t *testing.T) {
 		t.Errorf("tampered response %d", response.StatusCode)
 	}
 }
+
+func TestHLSRelayExtensionlessPlaylist(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	local, relay, err := startHLS(ctx, nativeSource{playlist: "https://" + deliveryHost + "/vod/manifest?ticket=fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(local, ".m3u8") {
+		t.Fatal("Media Foundation would receive a URL without the playlist extension")
+	}
+	relay.client.Transport = streamTransportFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/vod/manifest":
+			if r.URL.Query().Get("ticket") != "fixture" || r.Header.Get("Range") != "" {
+				t.Error("expected the signed upstream URL and a complete playlist request")
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/octet-stream"}},
+				Body: io.NopCloser(strings.NewReader("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=100000\nvideo.m3u8\n"))}, nil
+		case "/vod/video.m3u8":
+			return &http.Response{StatusCode: 403, Body: io.NopCloser(strings.NewReader("fixture rejected"))}, nil
+		}
+		t.Errorf("unexpected relay request: %s", r.URL.Path)
+		return nil, context.Canceled
+	})
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, local, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Range", "bytes=0-15")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil || response.StatusCode != 200 || response.Header.Get("Content-Type") != "application/vnd.apple.mpegurl" {
+		t.Fatalf("playlist response %d, read error %v", response.StatusCode, err)
+	}
+	lines := strings.Split(string(body), "\n")
+	if len(lines) != 4 || !strings.HasPrefix(lines[2], "http://"+relay.host+"/") {
+		t.Fatalf("variant was not routed through the relay: %q", body)
+	}
+	response, err = http.Get(lines[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != 403 {
+		t.Fatalf("upstream denial was changed to %d", response.StatusCode)
+	}
+	n := &nativePlayer{cancel: cancel, relay: relay}
+	n.failStream("Windows の動画再生機能で最初の映像を準備できませんでした。")
+	if !strings.Contains(n.status, "プレイリストを取得できませんでした (HTTP 403)") ||
+		strings.Contains(n.status, "fixture") || !strings.Contains(n.status, "公式 WebView") {
+		t.Fatalf("incorrect or unsanitized playback status: %q", n.status)
+	}
+}

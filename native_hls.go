@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -26,10 +28,11 @@ func deliveryURL(u *url.URL) bool {
 type hlsRelay struct {
 	server      *http.Server
 	host        string
+	playlist    string
 	key         [32]byte
 	cookies     []*http.Cookie
 	client      *http.Client
-	rootContext context.Context
+	lastFailure atomic.Pointer[string]
 }
 
 func startHLS(ctx context.Context, source nativeSource) (string, *hlsRelay, error) {
@@ -41,14 +44,14 @@ func startHLS(ctx context.Context, source nativeSource) (string, *hlsRelay, erro
 	if err != nil {
 		return "", nil, err
 	}
-	p := &hlsRelay{host: ln.Addr().String(), cookies: source.delivery, client: streamClient(nil), rootContext: ctx}
+	p := &hlsRelay{host: ln.Addr().String(), playlist: u.String(), cookies: source.delivery, client: streamClient(nil)}
 	if _, err := rand.Read(p.key[:]); err != nil {
 		ln.Close()
 		return "", nil, err
 	}
 	p.server = &http.Server{Handler: p, ReadHeaderTimeout: 3 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 20 * time.Second}
 	go p.server.Serve(ln)
-	go func() { <-ctx.Done(); p.server.Close() }()
+	context.AfterFunc(ctx, func() { p.server.Close() })
 	return p.local(u), p, nil
 }
 
@@ -63,12 +66,24 @@ func (p *hlsRelay) local(u *url.URL) string {
 	// when this playback closes. No credentials are passed to Media Foundation.
 	raw := u.String()
 	ext := path.Ext(u.Path)
+	if p.isPlaylist(u) {
+		ext = ".m3u8"
+	}
 	switch ext {
 	case ".m3u8", ".mp4", ".m4s", ".ts", ".aac", ".cmfa", ".cmfv", ".key":
 	default:
 		ext = ".bin"
 	}
 	return "http://" + p.host + "/" + p.token(raw) + "/" + base64.RawURLEncoding.EncodeToString([]byte(raw)) + ext
+}
+
+func (p *hlsRelay) isPlaylist(u *url.URL) bool {
+	return u.String() == p.playlist || strings.EqualFold(path.Ext(u.Path), ".m3u8")
+}
+
+func (p *hlsRelay) fail(w http.ResponseWriter, status int, reason string) {
+	p.lastFailure.Store(&reason)
+	w.WriteHeader(status)
 }
 
 func (p *hlsRelay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -94,7 +109,8 @@ func (p *hlsRelay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	request.Header.Set("Origin", "https://"+watchHost)
 	request.Header.Set("Referer", home)
-	if v := r.Header.Get("Range"); v != "" && path.Ext(target.Path) != ".m3u8" {
+	playlist := p.isPlaylist(target)
+	if v := r.Header.Get("Range"); v != "" && !playlist {
 		request.Header.Set("Range", v)
 	}
 	for _, c := range p.cookies {
@@ -104,20 +120,26 @@ func (p *hlsRelay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := p.client.Do(request)
 	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
+		if r.Context().Err() == nil {
+			p.fail(w, http.StatusBadGateway, "配信サーバーと通信できませんでした")
+		}
 		return
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusPartialContent {
+		status := http.StatusBadGateway
 		if res.StatusCode == http.StatusForbidden {
-			w.WriteHeader(http.StatusForbidden)
-		} else {
-			w.WriteHeader(http.StatusBadGateway)
+			status = http.StatusForbidden
 		}
+		resource := "配信データ"
+		if playlist {
+			resource = "プレイリスト"
+		}
+		p.fail(w, status, fmt.Sprintf("%sを取得できませんでした (HTTP %d)", resource, res.StatusCode))
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	if path.Ext(target.Path) == ".m3u8" || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "mpegurl") {
+	if playlist || strings.Contains(strings.ToLower(res.Header.Get("Content-Type")), "mpegurl") {
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		if r.Method == http.MethodHead {
 			return
@@ -125,12 +147,12 @@ func (p *hlsRelay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		const maxPlaylist = 2 << 20
 		body, err := io.ReadAll(io.LimitReader(res.Body, maxPlaylist+1))
 		if err != nil || len(body) > maxPlaylist {
-			w.WriteHeader(http.StatusBadGateway)
+			p.fail(w, http.StatusBadGateway, "プレイリストを読み取れませんでした")
 			return
 		}
 		modified, err := rewriteHLS(string(body), target, p.local)
 		if err != nil {
-			w.WriteHeader(http.StatusBadGateway)
+			p.fail(w, http.StatusBadGateway, "配信プレイリストの形式に対応していません")
 			return
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(modified)))
