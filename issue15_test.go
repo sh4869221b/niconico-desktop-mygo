@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/egoist/mygo/ui"
 	"strings"
 	"testing"
 )
@@ -32,5 +33,25 @@ func TestSearchRangeAndPageBounds(t *testing.T) {
 	}
 	if _, ok := p.searchPageNumber("3126"); ok {
 		t.Fatal("beyond snapshot ceiling")
+	}
+}
+
+func TestSearchJumpKeepsConditions(t *testing.T) {
+	total := 120
+	r := routeFor(home + "search/x?sort=v&order=a&page=2")
+	b := browser{navigation: []screenRoute{r}, result: catalogPage{total: &total, rawCount: 32}, closed: true}
+	v := ui.NewTester(b.draw, 1260, 850)
+	if err := v.Click("移動先ページ"); err != nil {
+		t.Fatal(err)
+	}
+	v.Key(ui.Ctrl, ui.KeyA)
+	v.Type("4")
+	if err := v.Click("指定ページへ"); err != nil {
+		t.Fatal(err)
+	}
+	got := b.navigation[b.index]
+	sort, asc := got.searchSort()
+	if got.page != 3 || sort.urlKey != "v" || !asc {
+		t.Fatal(got)
 	}
 }
