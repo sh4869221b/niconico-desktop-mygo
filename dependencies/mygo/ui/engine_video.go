@@ -168,8 +168,14 @@ func (v *videoEngine) advance(c *context, p *VideoPlayer) {
 	// A muted video is a picture, as a background is: it plays only
 	// while some of it shows, and stands still for less motion.
 	occluded := rt.host.occluded()
+	if v.preparing != nil {
+		occluded = rt.videoOccluded()
+	}
 	v.hold(v.preparing != nil || v.muted && (occluded || rt.preferences().ReduceMotion))
 	if occluded {
+		if v.preparing != nil {
+			rt.hiddenAsked = true // always try the first picture when the surface shows
+		}
 		// No frame builds until some of the window shows again, but this
 		// one did, as keys typed into a window that another covers build
 		// one: the frame it asks for waits for the window to show
@@ -258,7 +264,7 @@ func (v *videoEngine) setMuted(m bool) {
 }
 
 func (v *videoEngine) presentedStart() {
-	if v.closed || v.preparing == nil {
+	if v.closed || v.preparing == nil || v.rt.videoOccluded() {
 		return
 	}
 	v.preparing.PresentStart()

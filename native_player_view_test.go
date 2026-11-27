@@ -17,6 +17,80 @@ func (v danmakuTestVideo) Next() (ui.VideoFrame, error) {
 	return ui.VideoFrame{Image: v.frame, Duration: time.Minute}, nil
 }
 
+func TestNativePlayerStartupTimeout(t *testing.T) {
+	type playback struct{ current, failed *nativePlayer }
+	newView := func() (*ui.Tester, *playback) {
+		state := &playback{}
+		view := ui.NewTester(func(c *ui.Context) {
+			if n := state.current; n != nil && n.startExpired(c) {
+				state.failed, state.current = n, nil
+			}
+		}, 320, 240)
+		return view, state
+	}
+	t.Run("initially minimized and repeatedly restored", func(t *testing.T) {
+		view, state := newView()
+		view.SetWindowHidden(true)
+		player := &nativePlayer{}
+		state.current = player
+		view.Frame()
+		view.Advance(time.Minute)
+		view.SetWindowHidden(false)
+		view.Advance(6 * time.Second)
+		view.SetWindowHidden(true)
+		view.Advance(time.Minute)
+		view.SetWindowHidden(false)
+		view.Advance(4 * time.Second)
+		view.SetWindowHidden(true)
+		view.Advance(time.Minute)
+		view.SetWindowHidden(false)
+		view.Advance(10*time.Second - time.Millisecond)
+		if state.failed != nil {
+			t.Fatal("startup expired before 20 visible seconds")
+		}
+		view.Advance(time.Millisecond)
+		if state.failed != player {
+			t.Fatal("a visible stalled startup did not expire after using its remaining allowance")
+		}
+	})
+	t.Run("hidden notification at deadline", func(t *testing.T) {
+		view, state := newView()
+		player := &nativePlayer{startDeadline: time.Microsecond}
+		state.current = player
+		view.Frame()
+		// Frame timers dispatch at least one millisecond after arming. Make
+		// the hide event reach the view at the deadline while the wake is pending.
+		view.Advance(time.Microsecond)
+		view.SetWindowHidden(true)
+		view.Advance(time.Minute)
+		if state.failed != nil {
+			t.Fatal("a due timeout closed the minimized player")
+		}
+		view.SetWindowHidden(false)
+		if state.failed != player {
+			t.Fatal("restoring a stalled player with an exhausted allowance did not report the timeout")
+		}
+	})
+	t.Run("video replaced or closed before deadline", func(t *testing.T) {
+		view, state := newView()
+		state.current = &nativePlayer{}
+		view.Frame()
+		view.Advance(nativeStartTimeout - time.Second)
+		replacement := &nativePlayer{}
+		state.current = replacement
+		// Let the old scheduled wake reach the new player before a fresh build.
+		view.Advance(time.Second)
+		if state.failed != nil || state.current != replacement || replacement.startDeadline <= nativeStartTimeout {
+			t.Fatal("the previous video's deadline affected its replacement")
+		}
+		state.current = nil
+		view.Advance(time.Minute)
+		if state.failed != nil {
+			t.Fatal("a queued wake affected a closed player")
+		}
+	})
+}
+
 func TestNativePlayerPlaybackAndVolumeControls(t *testing.T) {
 	stream, err := ui.NewVideoPlayer(danmakuTestVideo{image.NewRGBA(image.Rect(0, 0, 40, 30))})
 	if err != nil {

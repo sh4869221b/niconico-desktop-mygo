@@ -14,7 +14,7 @@ import (
 type nativePlayer struct {
 	cancel                context.CancelFunc
 	stream                *ui.VideoPlayer
-	startTimer            *time.Timer
+	startDeadline         time.Duration
 	loadingStream         bool
 	pauseRequested        bool
 	stagedComments        *nativeCommentData
@@ -59,19 +59,11 @@ const (
 func (p *playerWindow) stopNative() {
 	if n := p.native; n != nil {
 		n.cancel()
-		n.stopStartTimer()
 		if n.stream != nil {
 			n.stream.Close()
 		}
 
 		p.native = nil
-	}
-}
-
-func (n *nativePlayer) stopStartTimer() {
-	if n.startTimer != nil {
-		n.startTimer.Stop()
-		n.startTimer = nil
 	}
 }
 
@@ -117,15 +109,6 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 				if n.pauseRequested {
 					n.stream.Pause()
 				}
-				stream := n.stream
-				n.startTimer = time.AfterFunc(nativeStartTimeout, func() {
-					mygo.RunOnMain(func() {
-						if active() && n.stream == stream && (stream.Preparing() || !stream.Ready()) {
-							n.failStart("最初の映像を表示できませんでした。公式 WebView で開き直してください。")
-							p.win.Invalidate()
-						}
-					})
-				})
 				n.status = ""
 				p.title = source.title
 				p.win.SetTitle(source.title + " ・ " + appName)
@@ -171,11 +154,29 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 }
 
 func (n *nativePlayer) failStart(message string) {
-	n.stopStartTimer()
 	n.cancel()
 	n.stream.Close()
 	n.stream = nil
 	n.status = message
+}
+
+// A startup deadline only requests a view rebuild. The current player checks
+// it on that frame, after any visibility change, so an old deadline cannot
+// close a replacement stream.
+func (n *nativePlayer) startExpired(c *ui.Context) bool {
+	elapsed, hidden := c.WindowVisibleTime()
+	if n.startDeadline == 0 {
+		n.startDeadline = elapsed + nativeStartTimeout
+	}
+	if hidden {
+		return false
+	}
+	remaining := n.startDeadline - elapsed
+	if remaining <= 0 {
+		return true
+	}
+	c.After(remaining)
+	return false
 }
 
 func (n *nativePlayer) installComments(blocked map[commentAuthor]bool) {
@@ -239,9 +240,14 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 		})
 		s := n.stream
-		if s != nil && s.Err() != nil {
-			n.failStart("配信を再生できませんでした。公式 WebView で開き直してください。")
-			s = nil
+		if s != nil {
+			switch {
+			case s.Err() != nil:
+				n.failStart("配信を再生できませんでした。公式 WebView で開き直してください。")
+			case (s.Preparing() || !s.Ready()) && n.startExpired(c):
+				n.failStart("最初の映像を表示できませんでした。公式 WebView で開き直してください。")
+			}
+			s = n.stream
 		}
 		if s == nil {
 			ui.Column(c).Grow(1).FillWidth().Padding(20).Justify(ui.Center).Children(func() {
@@ -251,7 +257,6 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		}
 		duration := s.Duration()
 		if s.Ready() && !s.Preparing() {
-			n.stopStartTimer()
 			n.installComments(b.commentNG.blocked)
 			if n.startAt > 0 && duration > 0 {
 				s.Seek(min(n.startAt, duration))

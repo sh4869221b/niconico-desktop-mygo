@@ -453,9 +453,10 @@ func (h *windowHost) refreshRate() float32 { return float32(h.conn.Surface.Refre
 // first frame reached the surface, which a window made hidden waits for
 // to become ready to show (OnReadyToShow), though it shows nothing yet.
 func (h *windowHost) occluded() bool {
-	if !h.shown {
-		return false
-	}
+	return h.shown && h.surfaceOccluded()
+}
+
+func (h *windowHost) surfaceOccluded() bool {
 	s, ok := h.conn.Surface.(platform.OccludableSurface)
 	return ok && s.Occluded()
 }
@@ -506,7 +507,7 @@ func (h *windowHost) present(s *scene.Scene) {
 	h.useWide(s, now)
 	defer h.ready()
 	var startup *videoEngine
-	if !h.occluded() {
+	if !h.surfaceOccluded() {
 		for _, v := range h.rt.videos {
 			if v.preparing != nil && v.startImage != nil {
 				startup = v
