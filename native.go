@@ -113,6 +113,7 @@ func (b *browser) refreshNative() {
 			if b.closed || b.official || b.epoch != epoch {
 				return
 			}
+			b.applyCatalogContext(r, &p)
 			b.result, b.resultErr, b.busy = p, err, false
 			b.status = p.searchMode
 			b.win.Invalidate()
@@ -473,5 +474,27 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 		} else {
 			b.navigate(item.link)
 		}
+	}
+}
+
+// Keep the known author when moving between their collections.
+func (b *browser) applyCatalogContext(r screenRoute, p *catalogPage) {
+	if r.kind != screenUser && r.kind != screenUserLists {
+		return
+	}
+	if p.publisher.name != "" {
+		if b.userNames == nil {
+			b.userNames = make(map[string]string)
+		}
+		b.userNames[r.key] = p.publisher.name
+	}
+	name := b.userNames[r.key]
+	if name == "" {
+		name = "ユーザー" + r.key
+	}
+	if r.kind == screenUserLists {
+		p.title = name + " の公開マイリスト"
+	} else {
+		p.title = name + " の投稿動画"
 	}
 }
