@@ -99,12 +99,12 @@ func TestGuestSearchSnapshotFallbackKeepsSort(t *testing.T) {
 				q.Get("_sort") != "+likeCounter" || q.Get("_offset") != "32" || q.Get("targets") != "tagsExact" {
 				t.Fatalf("unexpected snapshot request: %s", r.URL)
 			}
-			return testResponse(200, `{"meta":{"status":200},"data":[{"contentId":"sm9","tags":"初音ミク 曲　名 初音ミク","thumbnailUrl":"https://nicovideo.cdn.nimg.jp/thumbnails/9/9"}]}`), nil
+			return testResponse(200, `{"meta":{"status":200},"data":[{"contentId":"sm9","userId":123,"tags":"初音ミク 曲　名 初音ミク","thumbnailUrl":"https://nicovideo.cdn.nimg.jp/thumbnails/9/9"}]}`), nil
 		})
 		p, err := c.load(t.Context(), routeFor(home+"tag/kitty?page=2&"+tc.query))
 		if tc.snapshot {
 			if err != nil || calls != 2 || p.searchMode != "スナップショット検索" || len(p.items) != 1 || p.items[0].thumbnail == "" ||
-				!slices.Equal(p.items[0].tags, []string{"初音ミク", "曲　名"}) {
+				!slices.Equal(p.items[0].tags, []string{"初音ミク", "曲　名"}) || p.items[0].owner != home+"user/123/video" || p.items[0].ownerName != "" {
 				t.Fatalf("snapshot result %+v, %v, %d requests", p, err, calls)
 			}
 		} else if err == nil || calls != 1 {

@@ -406,6 +406,9 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 					if p.videos != "" && ui.Button(c, "投稿動画").Label(p.linkLabel()).Clicked() {
 						b.browseInMain(p.videos)
 					}
+					if target := p.seriesURL(); target != "" && ui.Button(c, "シリーズ").Clicked() {
+						b.browseInMain(target)
+					}
 				}
 				if s := n.stream; !s.Ready() || s.Preparing() || s.Buffering() {
 					ui.Text(c, "配信を読み込んでいます…").Wrap()

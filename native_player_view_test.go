@@ -189,6 +189,10 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 	if r := b.navigation[b.index]; r.kind != screenUser || r.key != "123" || b.player != p || !stream.Playing() {
 		t.Fatalf("publisher link disturbed playback or used the wrong route: %+v", r)
 	}
+	click("シリーズ")
+	if r := b.navigation[b.index]; r.kind != screenUserSeries || r.key != "123" || b.player != p || !stream.Playing() {
+		t.Fatalf("publisher series link disturbed playback or used the wrong route: %+v", r)
+	}
 	click("コメント一覧")
 	if !n.showOverview || view.HasText("コメント欄の内容") {
 		t.Fatal("closing comments affected the overview")

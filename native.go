@@ -236,6 +236,17 @@ func (b *browser) drawNative(c *ui.Context) {
 				if ui.Button(scope, "公開マイリスト").Clicked() {
 					b.navigate(home + "user/" + r.key + "/mylist")
 				}
+				if ui.Button(scope, "シリーズ").Clicked() {
+					b.navigate(home + "user/" + r.key + "/series")
+				}
+			case screenUserSeries:
+				if ui.Button(scope, "投稿動画").Clicked() {
+					b.navigate(home + "user/" + r.key + "/video")
+				}
+			case screenSeries:
+				if target := p.publisher.seriesURL(); target != "" && ui.Button(scope, "投稿者のシリーズ").Clicked() {
+					b.navigate(target)
+				}
 			case screenUserLists:
 				if ui.Button(scope, "投稿動画").Clicked() {
 					b.navigate(home + "user/" + r.key + "/video")
@@ -312,7 +323,9 @@ func (b *browser) drawNative(c *ui.Context) {
 		ui.Scroll(scope).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(scope).FillWidth().Gap(8).Children(func() {
 				b.drawCatalogIntro(scope, p)
-				if r.kind == screenSearch {
+				if p.emptyNotice != "" {
+					ui.Text(scope, p.emptyNotice).TextColor(t.TextMuted).Wrap()
+				} else if r.kind == screenSearch {
 					ui.Text(scope, "該当する動画はありません。").TextColor(t.TextMuted)
 				} else if r.kind != screenVideo {
 					ui.Text(scope, "表示する項目はありません。").TextColor(t.TextMuted)

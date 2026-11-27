@@ -15,15 +15,19 @@ type publisherMetadata struct {
 }
 
 func (m publisherMetadata) publisher(kind string) videoPublisher {
-	var id string
-	if json.Unmarshal(m.ID, &id) != nil {
-		id = string(m.ID)
-	}
 	name := strings.TrimSpace(m.Name)
 	if name == "" {
 		name = strings.TrimSpace(m.Nickname)
 	}
-	return publisherFor(kind, id, name)
+	return publisherFor(kind, metadataID(m.ID), name)
+}
+
+func metadataID(raw json.RawMessage) string {
+	var id string
+	if json.Unmarshal(raw, &id) != nil {
+		return string(raw)
+	}
+	return id
 }
 
 func publisherFor(kind, id, name string) videoPublisher {
@@ -46,4 +50,11 @@ func (p videoPublisher) linkLabel() string {
 		return p.name + "の投稿動画"
 	}
 	return "投稿動画"
+}
+
+func (p videoPublisher) seriesURL() string {
+	if r := routeFor(p.videos); r.kind == screenUser {
+		return home + "user/" + r.key + "/series"
+	}
+	return ""
 }
