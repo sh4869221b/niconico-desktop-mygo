@@ -476,7 +476,6 @@ func (r *Renderer) init() error {
 	r.tearing = r.uncapped && !r.composed && tearingSupported(r.factory)
 	r.b.Classes = true
 	r.b.JoinGlyphs = true
-	r.b.TrimStroke = true
 	cd := bufferDesc{ByteWidth: 16, Usage: usageDefault, BindFlags: bindConstantBuffer}
 	if failed(call(r.device, devCreateBuffer, uintptr(unsafe.Pointer(&cd)), 0, uintptr(unsafe.Pointer(&r.cbuf)))) {
 		return errors.New("d3d11: cannot create the constant buffer")

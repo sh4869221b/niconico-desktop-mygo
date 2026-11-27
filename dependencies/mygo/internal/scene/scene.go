@@ -250,10 +250,6 @@ func InnerRadii(r Rect, radii, w [4]float32) (Rect, [4]float32) {
 	return inner, Corners(inner, out, continuous)
 }
 
-// GlyphInsets are fully transparent texels at the edges of a mask. The
-// full atlas rectangle is kept for filtered draws under a transform.
-type GlyphInsets struct{ Left, Top, Right, Bottom uint8 }
-
 // Glyph is a glyph mask or color glyph copied from an atlas into a frame.
 type Glyph struct {
 	// Transform is applied before its Op's transform, for inline text.
@@ -262,7 +258,6 @@ type Glyph struct {
 	X, Y, W, H float32
 	// U, V, UW and VH are the bitmap's rectangle in its atlas.
 	U, V, UW, VH uint16
-	Blank        GlyphInsets
 	// Color tints mask glyphs; color glyphs take its alpha only.
 	Color Color
 	// Wide, unless 0, is 1 + the index in Scene.Wide of the glyph's

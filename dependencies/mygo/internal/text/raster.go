@@ -105,7 +105,6 @@ type GlyphImage struct {
 	Thin bool
 	// X, Y, W and H are the bitmap's rectangle in its atlas.
 	X, Y, W, H uint16
-	Blank      scene.GlyphInsets // transparent margins of a stroke mask
 	// Left and Top place the bitmap relative to the glyph's origin on the
 	// baseline, in pixels: Top is usually negative.
 	Left, Top float32
@@ -422,7 +421,7 @@ func (s *System) rasterizeStroke(f *Font, id uint32, scale, dx float32, shade Sh
 		return GlyphImage{}
 	}
 	s.MaskAtlas.Put(x, y, b.w, b.h, b.pix, b.w)
-	return GlyphImage{OK: true, Blank: strokeMargins(b), X: uint16(x), Y: uint16(y), W: uint16(b.w), H: uint16(b.h), Left: float32(b.left), Top: float32(b.top)}
+	return GlyphImage{OK: true, X: uint16(x), Y: uint16(y), W: uint16(b.w), H: uint16(b.h), Left: float32(b.left), Top: float32(b.top)}
 }
 
 // rasterizeShadow puts the mask of a glyph blurred by sigma pixels into
