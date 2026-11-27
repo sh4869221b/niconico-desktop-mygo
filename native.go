@@ -1,0 +1,442 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+)
+
+func readSessionCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), target string, now time.Time) (*http.Cookie, error) {
+	u, err := url.Parse(target)
+	if err != nil || !sessionEndpoint(u) {
+		return nil, errSignIn
+	}
+	values, err := list(mygo.CookieFilter{URL: target, Name: "user_session"})
+	if err != nil {
+		return nil, errors.New("ログイン情報を読み取れませんでした")
+	}
+	for _, value := range values {
+		if value.Name != "user_session" || !value.Secure ||
+			value.Domain != ".nicovideo.jp" && value.Domain != apiHost && value.Domain != "."+apiHost ||
+			!value.Expires.IsZero() && !value.Expires.After(now) {
+			continue
+		}
+		c := &http.Cookie{Name: value.Name, Value: value.Value, Secure: true, HttpOnly: true}
+		if c.Value != "" && c.Valid() == nil {
+			return c, nil
+		}
+	}
+	return nil, errSignIn
+}
+
+func (b *browser) navigate(link string) {
+	if allowedURL(link) == nil {
+		return
+	}
+	r := routeFor(link)
+	if r.kind == screenOfficial {
+		b.openOfficial(link)
+		return
+	}
+	b.openNative(r, true)
+}
+
+func (b *browser) openNative(r screenRoute, add bool) {
+	if b.official {
+		b.closeOfficial()
+	}
+	if add && (b.index == -1 || b.navigation[b.index] != r) {
+		b.navigation = append(b.navigation[:b.index+1], r)
+		b.index++
+		if len(b.navigation) > 100 {
+			b.navigation = b.navigation[1:]
+			b.index--
+		}
+	}
+	b.refreshNative()
+}
+
+func (b *browser) moveNative(delta int) {
+	next := b.index + delta
+	if next >= 0 && next < len(b.navigation) {
+		b.index = next
+		b.refreshNative()
+	}
+}
+
+func (b *browser) pageNative(delta int) {
+	if b.index < 0 {
+		return
+	}
+	r := b.navigation[b.index]
+	if page := r.page + delta; page >= 0 && page <= maxCatalogPage {
+		b.openNative(r.withPage(page), true)
+	}
+}
+
+func (b *browser) cancelLoad() {
+	if b.cancel != nil {
+		b.cancel()
+		b.cancel = nil
+	}
+	if b.thumbnails != nil {
+		b.thumbnails.setVisible(nil)
+	}
+	b.epoch++
+}
+
+func (b *browser) refreshNative() {
+	b.cancelLoad()
+	if b.index < 0 || b.closed || b.official {
+		return
+	}
+	r, epoch := b.navigation[b.index], b.epoch
+	b.result, b.resultErr, b.busy, b.status = catalogPage{}, nil, r.kind != screenHome, ""
+	if !b.busy {
+		b.win.Invalidate()
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.cancel = cancel
+	go func() {
+		defer cancel()
+		p, err := b.catalog.load(ctx, r)
+		mygo.RunOnMain(func() {
+			if b.closed || b.official || b.epoch != epoch {
+				return
+			}
+			b.result, b.resultErr, b.busy = p, err, false
+			b.status = p.searchMode
+			b.win.Invalidate()
+		})
+	}()
+	b.win.Invalidate()
+}
+
+// The main WebView handles browsing and login. The playback window owns watch pages.
+func (b *browser) playOfficialLink(view *mygo.WebView, raw string, alreadyNavigated bool) bool {
+	r := routeFor(raw)
+	if r.kind != screenVideo {
+		return false
+	}
+	go mygo.RunOnMain(func() {
+		if b.closed || !b.official || b.web != view {
+			return
+		}
+		if alreadyNavigated {
+			if view.Page().URL() != raw {
+				return
+			}
+			// A within-document or history navigation can bypass OnWillNavigate.
+			// Destroy the view before starting playback so the main window cannot keep playing.
+			target := b.source
+			if allowedURL(target) == nil {
+				target = b.officialTarget
+			}
+			b.web = nil
+			view.Destroy()
+			b.openOfficial(target)
+		}
+		b.openPlayer(r.target)
+	})
+	return true
+}
+
+func (b *browser) openOfficial(target string) {
+	if allowedURL(target) == nil || b.closed {
+		return
+	}
+	if routeFor(target).kind == screenVideo {
+		b.openPlayer(target)
+		return
+	}
+	b.cancelLoad()
+	b.official, b.officialTarget = true, target
+	b.loading()
+	b.win.Invalidate()
+	go mygo.RunOnMain(func() {
+		if b.closed || !b.official || b.officialTarget != target {
+			return
+		}
+		if b.web == nil {
+			b.attachOfficial()
+		} else {
+			b.loadOfficial(target)
+		}
+	})
+}
+
+func (b *browser) closeOfficial() {
+	view := b.web
+	b.web, b.official, b.loaded = nil, false, false
+	b.source, b.status = "", ""
+	if view != nil {
+		// Destroy the previous view rather than leaving hidden playback running.
+		go mygo.RunOnMain(view.Destroy)
+	}
+	b.checkLogin()
+}
+
+func (b *browser) leaveOfficial() {
+	b.closeOfficial()
+	b.refreshNative()
+}
+
+func (b *browser) drawNative(c *ui.Context) {
+	t := c.Theme()
+	if b.index < 0 {
+		return
+	}
+	r, p := b.navigation[b.index], b.result
+	epoch := b.epoch
+	// Keep the controls in the same focus scope while changing sort or page.
+	scope := c.Key(r.kind).Key(r.key)
+	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
+		if r.kind == screenHome {
+			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
+			ui.Row(scope).Gap(8).Wrap().Children(func() {
+				if ui.Button(scope, "自分のマイリスト").Clicked() {
+					b.navigate(mylists)
+				}
+				if ui.Button(scope, "ニコニコ公式トップ").Clicked() {
+					b.openOfficial(home)
+				}
+			})
+			return
+		}
+		title := p.title
+		if title == "" {
+			title = r.key
+		}
+		if title == "" {
+			title = "マイリスト"
+		}
+		if r.kind == screenSearch {
+			_, label := canonical(r.link)
+			ui.Text(scope, label).TextColor(t.TextMuted)
+		}
+		ui.Text(scope, title).FontSize(24).Bold().Wrap()
+		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+			switch r.kind {
+			case screenSearch:
+				b.drawSearchSort(scope, r)
+			case screenVideo:
+				if ui.PrimaryButton(scope, "再生").Clicked() {
+					b.openPlayer(r.target)
+				}
+			case screenUser:
+				if ui.Button(scope, "公開マイリスト").Clicked() {
+					b.navigate(home + "user/" + r.key + "/mylist")
+				}
+			case screenUserLists:
+				if ui.Button(scope, "投稿動画").Clicked() {
+					b.navigate(home + "user/" + r.key + "/video")
+				}
+			case screenOwnLists, screenOwnList:
+				if errors.Is(b.resultErr, errSignIn) && ui.PrimaryButton(scope, "ニコニコにログイン").Clicked() {
+					b.openOfficial(login)
+				}
+				if r.kind == screenOwnList && ui.Button(scope, "自分のマイリスト").Clicked() {
+					b.navigate(mylists)
+				}
+			}
+			if r.kind != screenVideo && ui.Button(scope, "公式ページ").Clicked() {
+				b.openOfficial(r.target)
+			}
+		})
+		if r.page > 0 || p.more || r.kind == screenSearch {
+			ui.Row(scope).Gap(8).AlignItems(ui.Center).Children(func() {
+				if ui.Button(scope, "前へ").Disabled(b.busy || r.page == 0).Clicked() {
+					b.pageNative(-1)
+				}
+				ui.Text(scope, fmt.Sprintf("%d ページ", r.page+1))
+				if ui.Button(scope, "次へ").Disabled(b.busy || !p.more || r.page == maxCatalogPage).Clicked() {
+					b.pageNative(1)
+				}
+			})
+		}
+		if b.epoch != epoch {
+			return
+		}
+		if b.busy {
+			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
+			return
+		}
+		if b.resultErr != nil {
+			ui.Text(scope, b.resultErr.Error()).Wrap()
+			if !errors.Is(b.resultErr, errSignIn) && ui.Button(scope, "再試行").Clicked() {
+				b.refreshNative()
+			}
+			return
+		}
+		if len(p.items) != 0 {
+			introRows := 0
+			if p.author != "" || p.summary != "" || len(p.links) > 0 {
+				introRows = 1
+			}
+			listScope := scope.Key(epoch).Key(r.page)
+			pane := ui.Column(listScope).Grow(1).MinHeight(0).MinWidth(0)
+			state := ui.Local(pane, "viewport", func() ui.ListState { return ui.ListState{} })
+			if b.thumbnails != nil {
+				first, last := state.Visible()
+				start := max(0, first-introRows)
+				end := min(len(p.items), last+1-introRows)
+				if start < end {
+					b.thumbnails.setVisible(p.items[start:end])
+				} else {
+					b.thumbnails.setVisible(nil)
+				}
+			}
+			pane.Children(func() {
+				ui.List(listScope, state, len(p.items)+introRows, func(i int) {
+					if i < introRows {
+						ui.Column(listScope).FillWidth().Gap(8).Children(func() { b.drawCatalogIntro(listScope, p) })
+						return
+					}
+					b.drawCatalogItem(listScope, r.kind, p.items[i-introRows])
+				}).Grow(1).MinHeight(0).Gap(6)
+			})
+			return
+		}
+		ui.Scroll(scope).Grow(1).MinHeight(0).Children(func() {
+			ui.Column(scope).FillWidth().Gap(8).Children(func() {
+				b.drawCatalogIntro(scope, p)
+				if r.kind == screenSearch {
+					ui.Text(scope, "該当する動画はありません。").TextColor(t.TextMuted)
+				} else if r.kind != screenVideo {
+					ui.Text(scope, "表示する項目はありません。").TextColor(t.TextMuted)
+				}
+			})
+		})
+	})
+}
+
+func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
+	current, ascending := r.searchSort()
+	choice := current.label
+	order := "降順"
+	if ascending {
+		order = "昇順"
+	}
+	ui.Text(scope, "並べ替え").TextColor(scope.Theme().TextMuted)
+	changed := ui.Select(scope, &choice, searchSortLabels).Label("並べ替え").Width(160).Changed()
+	if current.snapshotKey != "" {
+		changed = ui.Select(scope, &order, []string{"降順", "昇順"}).Label("並び順").Width(74).Changed() || changed
+	}
+	if changed {
+		for _, sort := range searchSorts {
+			if sort.label == choice {
+				b.openNative(r.withSearchSort(sort, order == "昇順"), true)
+				break
+			}
+		}
+	}
+}
+
+func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
+	if b.navigation[b.index].kind == screenVideo {
+		ui.Text(scope, "タグ").Bold()
+		b.drawVideoTags(scope, p.tags, "タグはありません。")
+	}
+	if p.author != "" {
+		ui.Text(scope, p.author).TextColor(scope.Theme().TextMuted).Wrap()
+	}
+	if len(p.description) != 0 && p.summary != "" {
+		b.drawDescription(scope, p.description)
+	} else if p.summary != "" {
+		ui.Text(scope, p.summary).Wrap()
+	}
+	for i, link := range p.links {
+		if slices.ContainsFunc(p.description, func(part descriptionPart) bool { return part.text != "" && part.link.title == link.title }) {
+			continue
+		}
+		row := scope.Key(fmt.Sprintf("link-%d", i))
+		if ui.Button(row, link.title).Clicked() {
+			b.followDescription(link.link)
+		}
+	}
+}
+
+func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card) {
+	t := scope.Theme()
+	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(10).Padding(6, 8).Radius(6).Background(t.Surface).Children(func() {
+		b.drawThumbnail(scope.Key(item.link), item)
+		ui.Column(scope).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Start).Children(func() {
+			title := ui.Button(scope, "").Label(item.title).Tooltip(item.title).FillWidth().MinWidth(0).Justify(ui.Start).Children(func() {
+				ui.Text(scope, item.title).Wrap().MaxLines(2)
+			})
+			if title.Clicked() {
+				b.navigate(item.link)
+			}
+			if item.summary != "" {
+				ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(t.TextMuted).FontSize(12).Wrap().MaxLines(2)
+			}
+		})
+		if item.owner != "" && kind != screenUser && ui.Button(scope, "投稿者").Clicked() {
+			b.navigate(item.owner)
+		}
+	})
+}
+
+type thumbnailPress struct {
+	x, y     float32
+	canceled bool
+}
+
+func (press *thumbnailPress) input(ev ui.InputEvent) bool {
+	switch ev.Kind {
+	case ui.InputPointerDown:
+		if ev.Button == 0 {
+			*press = thumbnailPress{x: ev.X, y: ev.Y, canceled: ev.Clicks > 1}
+		}
+	case ui.InputPointerMove, ui.InputPointerUp:
+		if ev.Button == 0 {
+			dx, dy := ev.X-press.x, ev.Y-press.y
+			press.canceled = press.canceled || ev.Canceled || dx*dx+dy*dy > 36
+		}
+	case ui.InputScroll:
+		press.canceled = true
+	case ui.InputKeyDown:
+		press.canceled = false
+	}
+	return false
+}
+
+func (b *browser) drawThumbnail(scope *ui.Context, item card) {
+	width := float32(112)
+	if w, _ := scope.Size(); w < 900 {
+		width = 84
+	}
+	height := width * 9 / 16
+	t := scope.Theme()
+	r := routeFor(item.link)
+	label := item.title + " を開く"
+	if r.kind == screenVideo {
+		label = item.title + " を再生"
+	}
+	button := ui.ButtonBase(scope).Size(width, height).Label(label).Tooltip(label).Radius(4).
+		Background(t.Background).Border(1, t.Border).Cursor(ui.CursorPointer)
+	press := ui.Local(button, "thumbnail press", func() thumbnailPress { return thumbnailPress{} })
+	button.HandleInput(press.input).Children(func() {
+		if b.thumbnails != nil {
+			if img := b.thumbnails.image(item.thumbnail); img != nil {
+				ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
+			}
+		}
+	})
+	if button.Clicked() && !press.canceled {
+		if r.kind == screenVideo {
+			b.openPlayer(r.target)
+		} else {
+			b.navigate(item.link)
+		}
+	}
+}

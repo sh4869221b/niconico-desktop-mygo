@@ -44,8 +44,11 @@ func siteHost(u *url.URL) bool {
 }
 
 func searchURL(mode, query string) string {
-	query = strings.TrimSpace(query)
-	if query == "" || query == "." || query == ".." || utf8.RuneCountInString(query) > 500 ||
+	return exactSearchURL(mode, strings.TrimSpace(query))
+}
+
+func exactSearchURL(mode, query string) string {
+	if strings.TrimSpace(query) == "" || query == "." || query == ".." || utf8.RuneCountInString(query) > 500 ||
 		strings.ContainsFunc(query, unicode.IsControl) {
 		return ""
 	}
@@ -102,12 +105,13 @@ func canonical(raw string) (string, string) {
 		if err != nil {
 			return "", ""
 		}
-		link := searchURL(mode, term)
+		link := exactSearchURL(mode, term)
 		if link == "" {
 			return "", ""
 		}
 		opts := url.Values{}
-		if val := u.Query().Get("sort"); sortKey.MatchString(val) {
+		val := u.Query().Get("sort")
+		if _, known := findSearchSort(val); val != "" && (known || sortKey.MatchString(val)) {
 			opts.Set("sort", val)
 		}
 		if val := u.Query().Get("order"); val == "a" || val == "d" {
@@ -122,6 +126,9 @@ func canonical(raw string) (string, string) {
 		return link, "キーワード検索"
 	}
 	if p == "my/mylist" {
+		if id, ok := strings.CutPrefix(u.EscapedFragment(), "/"); ok && numeric(id, 12) {
+			return mylists + "#/" + id, "マイリスト"
+		}
 		return mylists, "マイリスト"
 	}
 	if !shortPath.MatchString(p) {

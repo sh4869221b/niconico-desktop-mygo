@@ -28,6 +28,10 @@ func makeEntry(raw, title string) (entry, bool) {
 	if u == "" {
 		return entry{}, false
 	}
+	if routeFor(raw).officialBrowse {
+		// Preserve the conditions that require an official browse page.
+		u = raw
+	}
 	title = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return -1

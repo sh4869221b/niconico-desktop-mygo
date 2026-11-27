@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,12 +28,34 @@ type browser struct {
 	commentLanguageWarning       bool
 	data                         library
 	history, loaded, closed      bool
-	noHistory                    string
+	showLibrary                  bool
+	session                      *mygo.Session
+	loginState                   loginState
+	loginCheck                   uint64
+	loginCancel, stopLoginWatch  context.CancelFunc
+	official, openingOfficial    bool
+	officialTarget               string
+	catalog                      catalog
+	thumbnails                   *thumbnails
+	navigation                   []screenRoute
+	index                        int
+	result                       catalogPage
+	resultErr                    error
+	busy                         bool
+	cancel                       context.CancelFunc
+	epoch                        uint64
+	player                       *playerWindow
+	playbackRequest              uint64
+	playMode                     playbackMode
+	showPlaybackSettings         bool
+	playbackPath, playbackNotice string
+	commentNG                    commentNG
+	nativeVolume                 float64
 }
 
 func main() {
 	mygo.App.SetName(appName)
-	b := &browser{status: "WebView2を起動しています…"}
+	b := &browser{index: -1, showLibrary: true}
 	initial := home
 	if len(os.Args) > 1 && allowedURL(os.Args[1]) != nil {
 		initial = os.Args[1]
@@ -44,8 +68,17 @@ func main() {
 }
 
 func (b *browser) start(initial string) {
+	b.playMode = webPlayback
+	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
+		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		if mode, err := loadPlayback(b.playbackPath); err == nil {
+			b.playMode = mode
+		} else {
+			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
+		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
+		b.commentNG, _ = loadCommentNG(filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json"))
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
 			b.storeWarning = "既存の保存ファイルを読み込めません。上書きは行いません。"
@@ -54,45 +87,93 @@ func (b *browser) start(initial string) {
 		b.storeWarning = "保存先を取得できません。"
 	}
 	b.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 1000, MinHeight: 600,
+		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
-	done := make(chan struct{})
-	b.win.OnClosed(func() { b.closed = true; close(done) })
-	// Set only the first-party language preference before any official page
-	// can request comments. Reuse the existing profile and its sign-in data.
-	session := mygo.NewSession("niconico-desktop-mygo")
-	b.commentLanguageWarning = setJapaneseComments(session.Cookies.Set, time.Now()) != nil
-	if b.closed {
+	b.session = mygo.NewSession("niconico-desktop-mygo")
+	b.catalog = newCatalog(func(target string) (*http.Cookie, error) {
+		return readSessionCookie(b.session.Cookies.List, target, time.Now())
+	})
+	b.thumbnails = newThumbnails(func() {
+		if !b.closed {
+			b.win.Invalidate()
+		}
+	})
+	b.win.OnClosed(func() {
+		b.closed = true
+		if b.stopLoginWatch != nil {
+			b.stopLoginWatch()
+		}
+		if b.loginCancel != nil {
+			b.loginCancel()
+		}
+		b.cancelLoad()
+		if play := b.player; play != nil {
+			play.win.Close()
+		}
+	})
+	b.openNative(routeFor(home), true)
+	b.watchLogin()
+	b.checkLogin()
+	if initial != home {
+		b.navigate(initial)
+	}
+}
+
+func (b *browser) attachOfficial() {
+	if b.closed || !b.official || b.web != nil || b.openingOfficial {
+		return
+	}
+	b.openingOfficial = true
+	defer func() { b.openingOfficial = false }()
+	b.commentLanguageWarning = setJapaneseComments(b.session.Cookies.Set, time.Now()) != nil
+	if b.closed || !b.official {
 		return
 	}
 	view, err := b.win.NewWebView(mygo.WebViewOptions{
-		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: session},
+		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session},
 	})
 	if err != nil {
 		b.status = "WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。"
 		b.win.Invalidate()
 		return
 	}
+	if b.closed || !b.official {
+		view.Destroy()
+		return
+	}
 	b.web = view
 	p := view.Page()
+	active := func() bool { return !b.closed && b.official && b.web == view }
 	p.OnWillNavigate(func(e *mygo.NavigateEvent) {
+		if !active() {
+			e.PreventDefault()
+			return
+		}
 		if allowedURL(e.URL) == nil {
 			e.PreventDefault()
 			b.status = "ニコニコ以外への移動をブロックしました。"
+		} else if b.playOfficialLink(view, e.URL, false) {
+			e.PreventDefault()
 		} else {
 			b.loading()
 		}
 		b.win.Invalidate()
 	})
 	p.SetWindowOpenHandler(func(req mygo.WindowOpenRequest) *mygo.WindowOptions {
+		if !active() {
+			return nil
+		}
 		u := allowedURL(req.URL)
 		if u != nil && (req.UserInitiated || strings.EqualFold(u.Hostname(), "account.nicovideo.jp")) {
 			target := u.String()
+			if b.playOfficialLink(view, target, false) {
+				return nil
+			}
 			// Do not re-enter the WebView2 callback to navigate.
 			go mygo.RunOnMain(func() {
-				if !b.closed {
-					b.navigate(target)
+				if active() {
+					b.loadOfficial(target)
 				}
 			})
 		} else {
@@ -101,74 +182,72 @@ func (b *browser) start(initial string) {
 		}
 		return nil
 	})
-	p.OnDidNavigate(func(_ string) {
+	p.OnDidNavigate(func(raw string) {
+		if !active() {
+			return
+		}
 		b.loading()
+		b.playOfficialLink(view, raw, true)
 		b.win.Invalidate()
 	})
 	p.OnPageTitleUpdated(func(e *mygo.TitleEvent) {
 		e.PreventDefault()
-		b.title = e.Title
-		if b.loaded {
-			b.recordVideo()
+		if !active() {
+			return
 		}
+		b.title = e.Title
 		b.win.Invalidate()
 	})
 	p.OnDidFinishLoad(func() {
+		if !active() {
+			return
+		}
 		raw := p.URL()
+		if b.playOfficialLink(view, raw, true) {
+			return
+		}
 		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.checkLogin()
 		b.status = "ニコニコ公式ページ"
 		if !b.loaded {
 			b.status = "対応するページを開いてください。"
 		}
-		b.recordVideo()
 		b.win.Invalidate()
 	})
 	p.OnDidFailLoad(func(_ *mygo.LoadError) {
+		if !active() {
+			return
+		}
 		b.loaded = false
 		b.status = "ページを読み込めませんでした。接続を確認してください。"
 		b.win.Invalidate()
 	})
 	p.OnRenderProcessGone(func(_ string) {
+		if !active() {
+			return
+		}
 		b.loaded = false
 		b.status = "表示が終了しました。「更新」で再読み込みできます。"
 		b.win.Invalidate()
 	})
-	b.navigate(initial)
-	// WebView2 does not send a new-document event for most pushState/hash changes.
-	// Refresh only when the location changes, including the account mylist selector.
-	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				mygo.RunOnMain(func() {
-					if b.closed || !b.loaded {
-						return
-					}
-					raw := p.URL()
-					if raw == b.source {
-						return
-					}
-					b.source = raw
-					b.recordVideo()
-					b.win.Invalidate()
-				})
-			}
+	b.loadOfficial(b.officialTarget)
+	// pushState and hash changes do not always emit a new-document event.
+	watchWebSource(active, func() {
+		raw := p.URL()
+		if !b.playOfficialLink(view, raw, true) && b.loaded && raw != b.source {
+			b.source = raw
+			b.win.Invalidate()
 		}
-	}()
+	})
 }
 
 func (b *browser) loading() {
 	b.loaded = false
 	b.status = "読み込み中…"
 	b.title = ""
-	b.noHistory = ""
 }
 
-func (b *browser) navigate(target string) {
+func (b *browser) loadOfficial(target string) {
 	if b.web == nil || allowedURL(target) == nil {
 		return
 	}
@@ -188,10 +267,23 @@ func (b *browser) search(byTag bool) {
 }
 
 func (b *browser) current() string {
-	if !b.loaded || b.web == nil {
+	if b.official {
+		if b.loaded && b.web != nil {
+			return b.source
+		}
 		return ""
 	}
-	return b.web.Page().URL()
+	if b.index < 0 {
+		return ""
+	}
+	return b.navigation[b.index].link
+}
+
+func (b *browser) currentTitle() string {
+	if b.official {
+		return b.title
+	}
+	return b.result.title
 }
 
 func (b *browser) persist() bool {
@@ -205,17 +297,26 @@ func (b *browser) persist() bool {
 	return true
 }
 
-func (b *browser) recordVideo() {
-	e, ok := makeEntry(b.current(), b.title)
-	if !ok || e.Kind != "動画" || e.URL == b.noHistory || len(b.data.History) > 0 && b.data.History[0] == e {
+func (b *browser) recordVideo(p *playerWindow, raw, title string) {
+	e, ok := makeEntry(raw, title)
+	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
+		return
+	}
+	if e.Title == e.URL {
+		if i := slices.IndexFunc(b.data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+			e.Title = b.data.History[i].Title
+		}
+	}
+	if len(b.data.History) > 0 && b.data.History[0] == e {
 		return
 	}
 	b.data.History = putFirst(b.data.History, e, 100)
 	b.persist()
+	b.win.Invalidate()
 }
 
 func (b *browser) pinCurrent() {
-	e, ok := makeEntry(b.current(), b.title)
+	e, ok := makeEntry(b.current(), b.currentTitle())
 	if !ok {
 		return
 	}
@@ -228,7 +329,7 @@ func (b *browser) pinCurrent() {
 		return
 	}
 	b.data.Pins = putFirst(b.data.Pins, e, 500)
-	b.history = false
+	b.history, b.showLibrary = false, true
 	if b.persist() {
 		b.status = e.Kind + "を登録しました。"
 	}
@@ -242,8 +343,11 @@ func (b *browser) remove(e entry) {
 	items := &b.data.Pins
 	if b.history {
 		items = &b.data.History
-		if u, _ := canonical(b.current()); u == e.URL {
-			b.noHistory = u
+		if p := b.player; p != nil {
+			if p.historySuppressed == nil {
+				p.historySuppressed = make(map[string]bool)
+			}
+			p.historySuppressed[e.URL] = true
 		}
 	}
 	*items = slices.DeleteFunc(*items, func(x entry) bool { return x.URL == e.URL })
@@ -266,11 +370,18 @@ func (b *browser) copyCurrent() {
 
 func (b *browser) draw(c *ui.Context) {
 	t := c.Theme()
-	ui.Column(c).Fill().Background(t.Surface).Children(func() {
+	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
+		if b.showPlaybackSettings {
+			b.drawPlaybackSettings(c)
+		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			b.sidebar(c)
-			if b.web != nil {
+			if b.showLibrary {
+				b.sidebar(c)
+			}
+			if !b.official {
+				b.drawNative(c)
+			} else if b.web != nil {
 				ui.WebView(c, b.web).Grow(1).MinWidth(0)
 			} else {
 				ui.Column(c).Grow(1).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
@@ -278,67 +389,116 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		ui.Row(c).FillWidth().Padding(5, 12).Gap(12).Children(func() {
-			ui.Text(c, b.status).TextColor(t.TextMuted)
-			if b.commentLanguageWarning {
-				ui.Text(c, "日本語コメントの設定に失敗しました。アプリを再起動してください。").TextColor(t.TextMuted)
-			}
-			if b.storeWarning != "" {
-				ui.Text(c, b.storeWarning).TextColor(t.TextMuted)
-			}
-		})
+		if b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
+				if b.status != "" {
+					ui.Text(c, b.status).TextColor(t.TextMuted).Wrap()
+				}
+				if b.official && b.commentLanguageWarning {
+					ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted).Wrap()
+				}
+				if b.storeWarning != "" {
+					ui.Text(c, b.storeWarning).TextColor(t.TextMuted).Wrap()
+				}
+			})
+		}
 	})
 }
 
 func (b *browser) toolbar(c *ui.Context) {
 	var p *mygo.Page
-	if b.web != nil {
+	if b.official && b.web != nil {
 		p = b.web.Page()
 	}
-	ui.Row(c).FillWidth().Gap(6).Padding(8, 10).AlignItems(ui.Center).Children(func() {
-		back, forward := p != nil && p.CanGoBack(), p != nil && p.CanGoForward()
-		if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
-			p.GoBack()
-		}
-		if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
-			p.GoForward()
-		}
-		if ui.Button(c, "更新").Disabled(p == nil).Clicked() || p != nil && c.Shortcut(0, ui.KeyF5) {
-			b.loading()
-			p.Reload()
-		}
-		if ui.Button(c, "ホーム").Disabled(p == nil).Clicked() {
-			b.navigate(home)
-		}
-		input := ui.TextInput(c, &b.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・URL").Grow(1).MinWidth(120)
-		if c.Shortcut(ui.Ctrl, ui.KeyL) {
-			input.Focus()
-		}
-		if ui.PrimaryButton(c, "検索").Disabled(p == nil).Clicked() || input.Submitted() {
-			b.search(false)
-		}
-		if ui.Button(c, "タグ検索").Disabled(p == nil).Clicked() {
-			b.search(true)
-		}
-		saved, _ := canonical(b.current())
-		if ui.Button(c, "☆ 登録").Disabled(saved == "").Clicked() {
-			b.pinCurrent()
-		}
-		if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
-			b.copyCurrent()
-		}
-		if ui.Button(c, "マイリスト").Disabled(p == nil).Clicked() {
-			b.navigate(mylists)
-		}
-		if ui.Button(c, "ログイン").Disabled(p == nil).Clicked() {
-			b.navigate(login)
-		}
+	t := c.Theme()
+	ui.Column(c).FillWidth().Gap(6).Padding(8, 10).Background(t.Surface).Children(func() {
+		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+			back := b.official || b.index > 0
+			forward := p != nil && p.CanGoForward() || !b.official && b.index+1 < len(b.navigation)
+			if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
+				if p != nil && p.CanGoBack() {
+					p.GoBack()
+				} else if b.official {
+					b.leaveOfficial()
+				} else {
+					b.moveNative(-1)
+				}
+			}
+			if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
+				if p != nil {
+					p.GoForward()
+				} else {
+					b.moveNative(1)
+				}
+			}
+			if ui.Button(c, "更新").Clicked() || c.Shortcut(0, ui.KeyF5) {
+				if p != nil {
+					b.loading()
+					p.Reload()
+				} else if b.official {
+					go mygo.RunOnMain(b.attachOfficial)
+				} else {
+					b.refreshNative()
+				}
+			}
+			if ui.Button(c, "ホーム").Clicked() {
+				b.navigate(home)
+			}
+			input := ui.TextInput(c, &b.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
+			if c.Shortcut(ui.Ctrl, ui.KeyL) {
+				input.Focus()
+			}
+			if ui.PrimaryButton(c, "検索").Clicked() || input.Submitted() {
+				b.search(false)
+			}
+			if ui.Button(c, "タグ検索").Clicked() {
+				b.search(true)
+			}
+		})
+		ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
+			if b.official && ui.Button(c, "独自UIに戻る").Clicked() {
+				b.leaveOfficial()
+			}
+			if ui.Button(c, "登録・履歴").Checked(b.showLibrary).Clicked() {
+				b.showLibrary = !b.showLibrary
+			}
+			if ui.Button(c, "マイリスト").Clicked() {
+				b.navigate(mylists)
+			}
+			saved, _ := canonical(b.current())
+			if ui.Button(c, "☆ 登録").Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
+				b.pinCurrent()
+			}
+			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
+				b.copyCurrent()
+			}
+			if ui.Button(c, "設定").Clicked() {
+				b.showPlaybackSettings = !b.showPlaybackSettings
+			}
+			loginLabel := "ログイン"
+			loginTarget := login
+			if b.loginState == loginAuthenticated {
+				loginLabel = "アカウント"
+				loginTarget = "https://account.nicovideo.jp/my/account"
+			}
+			if ui.Button(c, loginLabel).Clicked() {
+				b.navigate(loginTarget)
+			}
+			ui.Text(c, b.loginState.label()).Role(ui.RoleStatus).TextColor(t.TextMuted)
+			if ui.Button(c, "再確認").Label("ログイン状態を再確認").Disabled(b.loginState == loginChecking).Clicked() {
+				b.checkLogin()
+			}
+		})
 	})
 }
 
 func (b *browser) sidebar(c *ui.Context) {
-	ui.Column(c).Width(218).Padding(10).Gap(8).Children(func() {
-		ui.Text(c, "NICONICO DESKTOP").Bold()
+	width, _ := c.Size()
+	sidebarWidth := float32(218)
+	if width < 900 {
+		sidebarWidth = 174
+	}
+	ui.Column(c).Width(sidebarWidth).Background(c.Theme().Surface).Padding(10).Gap(8).Children(func() {
 		ui.Row(c).Gap(5).Children(func() {
 			if ui.Button(c, "登録済み").Disabled(!b.history).Clicked() {
 				b.history = false
@@ -352,7 +512,7 @@ func (b *browser) sidebar(c *ui.Context) {
 			items = b.data.History
 		}
 		if len(items) == 0 {
-			ui.Text(c, "表示する項目はありません。").Wrap()
+			ui.Text(c, "表示する項目はありません。").TextColor(c.Theme().TextMuted).Wrap()
 			return
 		}
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
