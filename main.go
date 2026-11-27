@@ -292,15 +292,29 @@ func (b *browser) currentTitle() string {
 	return b.result.title
 }
 
-func (b *browser) persist() bool {
+func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) {
 	if b.storeWarning != "" {
-		return false
+		return edit(&b.data), false
 	}
-	if err := saveLibrary(b.libraryPath, b.data); err != nil {
+	var latest library
+	err := withSettingsLock(b.libraryPath, func() error {
+		var err error
+		latest, err = loadLibrary(b.libraryPath)
+		if err != nil {
+			return err
+		}
+		changed = edit(&latest)
+		if changed {
+			return saveLibrary(b.libraryPath, latest)
+		}
+		return nil
+	})
+	if err != nil {
 		b.status = "保存に失敗しました。操作はこのセッションにのみ反映されます。"
-		return false
+		return edit(&b.data), false
 	}
-	return true
+	b.data = latest
+	return changed, true
 }
 
 func (b *browser) recordVideo(p *playerWindow, raw, title string) {
@@ -308,17 +322,22 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
 		return
 	}
-	if e.Title == e.URL {
-		if i := slices.IndexFunc(b.data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
-			e.Title = b.data.History[i].Title
+	b.changeLibrary(func(data *library) bool {
+		next := e
+		if next.Title == next.URL {
+			if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+				next.Title = data.History[i].Title
+			}
 		}
+		if len(data.History) > 0 && data.History[0] == next {
+			return false
+		}
+		data.History = putFirst(data.History, next, 100)
+		return true
+	})
+	if b.win != nil {
+		b.win.Invalidate()
 	}
-	if len(b.data.History) > 0 && b.data.History[0] == e {
-		return
-	}
-	b.data.History = putFirst(b.data.History, e, 100)
-	b.persist()
-	b.win.Invalidate()
 }
 
 func (b *browser) pinCurrent() {
@@ -330,14 +349,22 @@ func (b *browser) pinCurrent() {
 		b.status = b.storeWarning
 		return
 	}
-	if len(b.data.Pins) >= 500 || slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == e.URL }) {
-		b.status = "登録済み、または登録件数が上限に達しています。"
-		return
+	changed, saved := b.changeLibrary(func(data *library) bool {
+		if len(data.Pins) >= 500 || slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL }) {
+			return false
+		}
+		data.Pins = putFirst(data.Pins, e, 500)
+		return true
+	})
+	if changed {
+		b.history, b.showLibrary = false, true
 	}
-	b.data.Pins = putFirst(b.data.Pins, e, 500)
-	b.history, b.showLibrary = false, true
-	if b.persist() {
-		b.status = e.Kind + "を登録しました。"
+	if saved {
+		if changed {
+			b.status = e.Kind + "を登録しました。"
+		} else {
+			b.status = "登録済み、または登録件数が上限に達しています。"
+		}
 	}
 }
 
@@ -346,9 +373,7 @@ func (b *browser) remove(e entry) {
 		b.status = b.storeWarning
 		return
 	}
-	items := &b.data.Pins
 	if b.history {
-		items = &b.data.History
 		if p := b.player; p != nil {
 			if p.historySuppressed == nil {
 				p.historySuppressed = make(map[string]bool)
@@ -356,8 +381,16 @@ func (b *browser) remove(e entry) {
 			p.historySuppressed[e.URL] = true
 		}
 	}
-	*items = slices.DeleteFunc(*items, func(x entry) bool { return x.URL == e.URL })
-	if b.persist() {
+	_, saved := b.changeLibrary(func(data *library) bool {
+		items := &data.Pins
+		if b.history {
+			items = &data.History
+		}
+		before := len(*items)
+		*items = slices.DeleteFunc(*items, func(x entry) bool { return x.URL == e.URL })
+		return len(*items) != before
+	})
+	if saved {
 		b.status = "選択した項目を削除しました。"
 	}
 }
