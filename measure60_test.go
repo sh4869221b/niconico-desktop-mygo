@@ -112,7 +112,7 @@ func TestMeasure60(t *testing.T) {
 	if err := saveLibrary(b.libraryPath, b.data); err != nil {
 		t.Fatal(err)
 	}
-	// Calibration does not contaminate the fixture creation above.
+	// UI probes start after the seed has been durably written.
 	probe := ""
 	var previous time.Time
 	mygo.App.SetName("MyGo Issue 60 measurement")
