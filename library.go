@@ -110,16 +110,16 @@ func saveLibrary(path string, l library) error {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err != nil {
+	if err = observeLibrary60("write", func() error { _, e := f.Write(data); return e }); err != nil {
 		f.Close()
 		return err
 	}
-	if err = f.Sync(); err != nil {
+	if err = observeLibrary60("sync", f.Sync); err != nil {
 		f.Close()
 		return err
 	}
-	if err = f.Close(); err != nil {
+	if err = observeLibrary60("close", f.Close); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	return observeLibrary60("rename", func() error { return os.Rename(f.Name(), path) })
 }
