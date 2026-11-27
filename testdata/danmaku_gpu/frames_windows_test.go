@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"fmt"
 	"testing"
@@ -11,6 +12,52 @@ import (
 
 // Shapes with DirectWrite and reads the actual premultiplied D3D11 target.
 // The native player gets an in-memory video. No browser or stream is opened.
+func compareDanmakuFrame(t *testing.T, r *ui.Recorder, name string, measure bool) []byte {
+	t.Helper()
+	base, oldWork, err := r.DanmakuTestBGRA(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, work, err := r.DanmakuTestBGRA(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldWork[0] != work[0] {
+		t.Errorf("%s: instance count %d, reference %d", name, work[0], oldWork[0])
+	}
+	if measure {
+		for _, pair := range []struct {
+			label string
+			w     [6]int
+		}{{"reference", oldWork}, {"candidate", work}} {
+			v := pair.w
+			t.Logf("WORK %s %s instances=%d batches=%d mask/ClearType-pixels=%d mixed-text-batches=%d mixed-color-batches=%d mixed-glyph-pixels=%d", pair.label, name, v[0], v[1], v[2], v[3], v[4], v[5])
+		}
+	}
+	if !bytes.Equal(base, got) {
+		if len(base) != len(got) {
+			t.Fatalf("%s: reference size %d, candidate %d", name, len(base), len(got))
+		}
+		again, _, err := r.DanmakuTestBGRA(true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(base, again) {
+			t.Fatalf("%s: reference renderer is not reproducible on the very same scene", name)
+		}
+		diff, maxDelta := 0, 0
+		for i, v := range base {
+			if v != got[i] {
+				diff++
+				delta := int(v) - int(got[i])
+				maxDelta = max(maxDelta, delta, -delta)
+			}
+		}
+		t.Errorf("%s: %d/%d BGRA channels differ, max delta %d", name, diff, len(base), maxDelta)
+	}
+	return got
+}
+
 func TestCompareD3D11Danmaku(t *testing.T) {
 	for _, density := range danmakuDensities {
 		n, draw := densityPlayer(t, density.interval)
@@ -23,13 +70,8 @@ func TestCompareD3D11Danmaku(t *testing.T) {
 			for i, ms := range []int64{5000, 5017, 5033, 5033, 13999, 2701, 2720, 26000} {
 				n.stream.Seek(time.Duration(ms) * time.Millisecond)
 				frame := rec.Frame(time.Duration(i) * time.Second / 60)
-				pixels, work, err := rec.DanmakuTestBGRA()
-				if err != nil {
-					t.Fatal(err)
-				}
-				if i == 1 && size.scale == 1 {
-					t.Logf("WORK %s active=%d instances=%d batches=%d mask/ClearType-pixels=%d mixed-text-batches=%d mixed-color-batches=%d mixed-glyph-pixels=%d", density.name, len(n.danmaku.active), work[0], work[1], work[2], work[3], work[4], work[5])
-				}
+				name := fmt.Sprintf("%s %dx%d@%g %dms active=%d", density.name, size.w, size.h, size.scale, ms, len(n.danmaku.active))
+				pixels := compareDanmakuFrame(t, rec, name, i == 1 && size.scale == 1)
 				t.Logf("FRAME %s %d %d %g %d %d %d %x", density.name, size.w, size.h, size.scale, ms, len(n.danmaku.active), len(frame.Glyphs), sha256.Sum256(pixels))
 			}
 			rec.Close()
@@ -49,10 +91,7 @@ func TestCompareD3D11Danmaku(t *testing.T) {
 			box.W, box.H = 370, 221
 		}
 		frame := rec.Frame(time.Duration(i) * time.Second / 60)
-		pixels, _, err := rec.DanmakuTestBGRA()
-		if err != nil {
-			t.Fatal(err)
-		}
+		pixels := compareDanmakuFrame(t, rec, fmt.Sprintf("Unique %d", at), false)
 		t.Logf("FRAME Unique %d %d %d %s %x", ms, len(d.active), len(frame.Glyphs), fmt.Sprint(box), sha256.Sum256(pixels))
 	}
 }

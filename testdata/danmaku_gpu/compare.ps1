@@ -1,52 +1,49 @@
-# Run in a candidate checkout with the fixed baseline commit available locally.
+# Compare both renderers on the same live native-player scenes, including
+# the identical DirectWrite atlas texels, UI frames and in-memory video.
+param([string]$Revision = "HEAD")
 $ErrorActionPreference = "Stop"
 $here = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $base = "443592d9e4df5b52859aef11cbce30f3593c2787"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
 $old = Join-Path $tmp "base"
+$actual = Join-Path $tmp "candidate"
 New-Item -ItemType Directory $tmp | Out-Null
-
-function Read-Frames([string]$root, [string]$label) {
-    $map = @{}
-    $map[(Join-Path $root "z_compare_danmaku_windows_test.go")] = Join-Path $PSScriptRoot "frames_windows_test.go"
-    $map[(Join-Path $root "dependencies/mygo/ui/z_danmaku_readback_windows.go")] = Join-Path $PSScriptRoot "recorder_windows.go"
-    $map[(Join-Path $root "dependencies/mygo/internal/gpu/d3d11/z_danmaku_readback_windows.go")] = Join-Path $PSScriptRoot "d3d11_windows.go"
-    $overlay = Join-Path $tmp "$label.json"
-    @{Replace = $map} | ConvertTo-Json -Depth 3 | Set-Content -Encoding utf8NoBOM $overlay
-    Push-Location $root
-    try {
-        $log = & go test -mod=readonly "-overlay=$overlay" -count=1 -run '^TestCompareD3D11Danmaku$' -v .
-        if ($LASTEXITCODE) { throw ($log -join [Environment]::NewLine) }
-        foreach ($row in $log | Where-Object { $_ -match ': WORK ' }) {
-            $line = "$label " + ($row -split ': WORK ',2)[1]
-            Write-Host $line
-            if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "- $line" }
-        }
-        $rows = @($log | Where-Object { $_ -match ': FRAME ' } | ForEach-Object { ($_ -split ': FRAME ',2)[1] })
-        if ($rows.Count -ne 54) { throw "Expected 54 readbacks for $label, found $($rows.Count)" }
-        return $rows
-    } finally { Pop-Location }
-}
 
 try {
     git -C $here worktree add --detach $old $base
-    if ($LASTEXITCODE) { throw "Cannot check out the baseline" }
-    $a = @(Read-Frames $old "baseline")
-    $b = @(Read-Frames $here "candidate")
-    $diff = @()
-    for ($i=0; $i -lt $a.Count; $i++) {
-        if ($a[$i] -cne $b[$i]) { $diff += "Frame $i differs. Baseline $($a[$i]). Candidate $($b[$i])." }
+    if ($LASTEXITCODE) { throw "Cannot check out the reference" }
+    git -C $here worktree add --detach $actual $Revision
+    if ($LASTEXITCODE) { throw "Cannot check out $Revision" }
+
+    # Compile the reference builder and D3D11 renderer as a second internal
+    # package. Both take scene.Scene from the exact same frame of drawPlayer.
+    $gpu = Join-Path $actual "dependencies/mygo/internal/gpu"
+    $ref = Join-Path $actual "dependencies/mygo/internal/danmakuref"
+    Copy-Item -LiteralPath (Join-Path $old "dependencies/mygo/internal/gpu") -Destination $ref -Recurse
+    foreach ($file in Get-ChildItem -LiteralPath $ref -Recurse -Filter "*.go") {
+        $src = [IO.File]::ReadAllText($file.FullName)
+        $src2 = $src.Replace("github.com/egoist/mygo/internal/gpu", "github.com/egoist/mygo/internal/danmakuref")
+        if ($src -cne $src2) { [IO.File]::WriteAllText($file.FullName, $src2) }
     }
-    if ($diff.Count) {
-        $repeat = @(Read-Frames $old "baseline-repeat")
-        for ($i=0; $i -lt $a.Count; $i++) {
-            if ($a[$i] -cne $repeat[$i]) { throw "Baseline is not reproducible at frame $i." }
-        }
-        $diff | Select-Object -First 3 | Write-Host
-        throw "$($diff.Count) of $($a.Count) frames differ from the repeatable baseline."
+    foreach ($dir in @($gpu, $ref)) {
+        Copy-Item (Join-Path $PSScriptRoot "d3d11_windows.go") (Join-Path $dir "d3d11/z_danmaku_readback_windows.go")
     }
-    Write-Output "54 DirectWrite/D3D11 readbacks, active counts and glyph counts match $base."
+    Copy-Item (Join-Path $PSScriptRoot "recorder_windows.go") (Join-Path $actual "dependencies/mygo/ui/z_danmaku_readback_windows.go")
+    Copy-Item (Join-Path $PSScriptRoot "frames_windows_test.go") (Join-Path $actual "z_compare_danmaku_windows_test.go")
+    Push-Location $actual
+    try {
+        $out = & go test -mod=readonly -count=1 -run '^TestCompareD3D11Danmaku$' -v .
+        $rc = $LASTEXITCODE
+        $out | Write-Output
+        if ($rc) { throw "D3D11 comparison for $Revision failed" }
+        if (@($out | Where-Object { $_ -match ': FRAME ' }).Count -ne 54) { throw "Expected 54 readbacks" }
+        $summary = "54 same-scene D3D11 images and instance counts match $base ($Revision)."
+        Write-Output $summary
+        if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary }
+    } finally { Pop-Location }
 } finally {
-    if (Test-Path (Join-Path $old ".git")) { git -C $here worktree remove $old }
+    foreach ($dir in @($actual,$old)) {
+        if (Test-Path (Join-Path $dir ".git")) { git -C $here worktree remove --force $dir }
+    }
     Remove-Item -LiteralPath $tmp -Recurse -Force
 }
