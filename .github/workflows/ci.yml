@@ -27,6 +27,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: Compile glyph shader candidates
+        if: github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
+        shell: pwsh
+        run: ./testdata/danmaku_gpu/compile.ps1
       - name: Test
         run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows github.com/egoist/mygo/internal/gpu/d3d11
       - name: Compare native player D3D11 pixels
