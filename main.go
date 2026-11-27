@@ -38,6 +38,7 @@ type browser struct {
 	catalog                      catalog
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
+	nativeVisits                 []*catalogVisit
 	index                        int
 	result                       catalogPage
 	resultErr                    error
