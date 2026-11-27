@@ -202,6 +202,11 @@ func (b *browser) drawNative(c *ui.Context) {
 	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
 		if r.kind == screenHome {
 			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
+			ui.Text(scope, "ログインせずに動画を検索できます。上の入力欄にキーワードやタグを入力してください。").Wrap()
+			if ui.PrimaryButton(scope, "例：初音ミクを検索欄に入れる").Clicked() {
+				b.field, b.focusSearch = "初音ミク", true
+			}
+			ui.Text(scope, "結果の画像は再生、タイトルは詳細を開きます。気に入ったページは「☆ 登録」で保存できます。").Wrap()
 			ui.Row(scope).Gap(8).Wrap().Children(func() {
 				if ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
