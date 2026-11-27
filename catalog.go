@@ -227,6 +227,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	sortMetrics                                       map[string]string
 }
 
 type catalogPage struct {
@@ -361,7 +362,7 @@ func searchParameters(r screenRoute) url.Values {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
-		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId"},
+		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId,startTime,lastCommentTime,likeCounter,mylistCounter"},
 		"_sort":  {direction + sort.snapshotKey}, "_limit": {strconv.Itoa(searchPageSize)}, "_offset": {strconv.Itoa(r.page * searchPageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
@@ -389,6 +390,8 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	}
 	type row struct {
 		ContentID, Title, ThumbnailURL             string
+		StartTime, LastCommentTime                 string
+		LikeCounter, MylistCounter                 *int
 		LengthSeconds, ViewCounter, CommentCounter int
 		Tags                                       json.RawMessage
 		UserID, ChannelID                          json.RawMessage
@@ -404,6 +407,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	for _, item := range result.Data {
 		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
+			v.sortMetrics = searchMetrics(item.StartTime, item.LastCommentTime, item.LikeCounter, item.MylistCounter)
 			v.tags = searchVideoTags(item.Tags)
 			v.owner = (publisherMetadata{ID: item.ChannelID}).publisher("channel").videos
 			if v.owner == "" {
@@ -416,13 +420,17 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 }
 
 type apiVideo struct {
-	ID, Title               string
-	Duration                int
-	Count                   struct{ View, Comment int }
-	Owner                   publisherMetadata
-	Tag, Tags               json.RawMessage
-	Thumbnail               struct{ URL, MiddleURL, ListingURL string }
-	RequireSensitiveMasking bool
+	ID, Title string
+	Duration  int
+	Count     struct {
+		View, Comment int
+		Like, Mylist  *int
+	}
+	RegisteredAt, LastCommentTime string
+	Owner                         publisherMetadata
+	Tag, Tags                     json.RawMessage
+	Thumbnail                     struct{ URL, MiddleURL, ListingURL string }
+	RequireSensitiveMasking       bool
 }
 
 func (v apiVideo) thumbnailURL() string {
@@ -439,6 +447,7 @@ func (v apiVideo) thumbnailURL() string {
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
 	x.thumbnail = v.thumbnailURL()
+	x.sortMetrics = searchMetrics(v.RegisteredAt, v.LastCommentTime, v.Count.Like, v.Count.Mylist)
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
 	if len(x.tags) == 0 {
