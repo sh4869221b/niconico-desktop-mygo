@@ -142,6 +142,8 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			details.notice = "コメントを取得できませんでした。"
 		} else if len(comments) == 0 {
 			details.notice = "表示できる日本語コメントはありません。"
+		} else if len(comments) == 15000 {
+			details.notice = "取得したコメントのうち15,000件まで表示しています。"
 		}
 		mygo.RunOnMain(func() {
 			if active() && ctx.Err() == nil {
