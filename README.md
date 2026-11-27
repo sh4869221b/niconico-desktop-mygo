@@ -28,6 +28,29 @@ GitHub Actionsの「Windows build」はテスト、静的チェック、Windows 
 
 公開版はScoopの`mybucket/niconico-desktop-mygo`で導入できます。C#版とは別パッケージです。
 
+## ダウンロードと初回起動
+
+配布元はこのリポジトリの [GitHub Releases](https://github.com/sh4869221b/niconico-desktop-mygo/releases) です。ZIP 版は同じリリースの `NiconicoDesktopMyGo-win-x64.zip` と `SHA256SUMS.txt` を取得し、展開・起動前に PowerShell で照合できます。
+
+```powershell
+$line = @(Get-Content .\SHA256SUMS.txt | Where-Object { $_ -match '^[0-9a-fA-F]{64}  NiconicoDesktopMyGo-win-x64\.zip$' })
+if ($line.Count -ne 1) { throw '対象 ZIP の SHA-256 を確認できません。' }
+$expected = ($line[0] -split '  ')[0].ToLowerInvariant()
+$actual = (Get-FileHash .\NiconicoDesktopMyGo-win-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -cne $expected) { throw 'SHA-256 が一致しません。起動せず、配布元を確認してください。' }
+'公開された SHA-256 と一致しました。'
+```
+
+一致は同じ配布元の ZIP と検証値の整合を確認するものです。発行元のコード署名を証明するものではありません。v0.3.0 の初回実機確認では EXE は未署名でした。展開した版の署名状態は次で確認できます。
+
+```powershell
+Get-AuthenticodeSignature .\NiconicoDesktopMyGo.exe | Format-List Status,SignerCertificate
+```
+
+Windows の警告は、取得方法や端末のポリシーによって異なります。警告が出たら表示されたファイル名・発行元・配布元を確認し、不明な場合は起動を中止してください。警告が出なかったことだけでは安全性を判断できません。防御機能や組織のポリシーを無効にする操作は案内しません。Scoop 版を使う場合もパッケージ名 `mybucket/niconico-desktop-mygo` と配布 URL・ハッシュを確認してください。
+
+ZIP / Scoop の初回表示の比較手順と未検証項目は [検証記録](docs/validation/issue-59.md) にあります。
+
 ## 再生プレーヤーの選択
 
 上部の「設定」から選択できます。切り替えは次に動画を開くときに反映され、アプリを閉じても保持されます。どちらも再生は別ウィンドウです。
