@@ -402,11 +402,11 @@ func TestPlayerDanmakuControls(t *testing.T) {
 	if stream.Playing() || !hasRed() {
 		t.Fatal("expected the paused video with a red overlay")
 	}
-	click("コメント表示切替")
+	click("弾幕を表示")
 	if n.showComments || hasRed() {
 		t.Fatal("hidden overlay still painted")
 	}
-	click("コメント表示切替")
+	click("弾幕を表示")
 	if !n.showComments || !hasRed() {
 		t.Fatal("overlay did not return")
 	}

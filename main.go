@@ -51,6 +51,8 @@ type browser struct {
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
 	nativeVolume                 float64
+	nativeDisplay                nativeDisplayPreferences
+	nativeDisplayNotice          string
 
 	searchSortPath, searchSortNotice string
 	searchDefault                    searchSortPreference
@@ -75,6 +77,11 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		if prefs, err := loadNativeDisplay(b.nativeDisplayPath()); err == nil {
+			b.nativeDisplay = prefs
+		} else {
+			b.nativeDisplayNotice = "表示設定を読み込めませんでした。"
+		}
 		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
 		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {

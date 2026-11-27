@@ -111,5 +111,6 @@ func (b *browser) drawPlaybackSettings(c *ui.Context) {
 			}
 		})
 		ui.Text(c, "どちらも別ウィンドウで開きます。独自プレーヤーで再生できない場合は公式プレーヤーで開けます。").Wrap()
+		b.drawNativeDisplaySettings(c)
 	})
 }
