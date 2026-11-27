@@ -68,8 +68,7 @@ func TestMeasure58(t *testing.T) {
 		}
 		s.SetVolume(0)
 		s.PrepareStart(0)
-		ctx, cancel := context.WithCancel(context.Background())
-		_ = ctx
+		_, cancel := context.WithCancel(context.Background())
 		n := &nativePlayer{stream: s, cancel: cancel, recorded: true}
 		p := &playerWindow{native: n}
 		b := &browser{player: p}

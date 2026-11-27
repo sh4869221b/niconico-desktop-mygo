@@ -40,6 +40,8 @@ class FixtureTest(unittest.TestCase):
                 thread.join()
                 server.server_close()
             rows = [json.loads(line) for line in log.getvalue().splitlines()]
-            self.assertEqual(sum(r["event"] == "request" for r in rows), 3)
+            self.assertEqual(sum(r["event"] == "request" for r in rows), 5)
             self.assertEqual(sum(r.get("bytes", 0) for r in rows), 9)
+            self.assertEqual(sum(r.get("status") == 404 for r in rows), 2)
+            self.assertEqual({r["seq"] for r in rows if r["event"] == "request"}, {r["request_id"] for r in rows if r["event"] == "response"})
             self.assertTrue(any(r.get("label") == "drag-1" for r in rows))

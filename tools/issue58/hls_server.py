@@ -29,11 +29,17 @@ class Server(http.server.ThreadingHTTPServer):
             if self.log:
                 self.log.write(json.dumps(row) + "\n")
                 self.log.flush()
+            return self.sequence
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
+
+    def send_error(self, code, message=None, explain=None):
+        if hasattr(self, "request_id"):
+            self.server.event(event="response", request_id=self.request_id, path=self.media_path, status=code, bytes=0, elapsed_ms=(time.monotonic()-self.started)*1000, outcome="http-error")
+        super().send_error(code, message, explain)
 
     def do_HEAD(self):
         self.serve(False)
@@ -49,6 +55,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        self.started = time.monotonic()
+        self.media_path = u.path
+        self.request_id = self.server.event(event="request", path=u.path, range=self.headers.get("Range", ""), method=self.command)
         path = (self.server.root / urllib.parse.unquote(u.path).lstrip("/")).resolve()
         if not path.is_relative_to(self.server.root) or not path.is_file():
             self.send_error(404)
@@ -71,7 +80,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_error(416)
                 return
             status = 206
-        self.server.event(event="request", path=u.path, range=value, method=self.command)
         begin = time.monotonic()
         sent, outcome = 0, "complete"
         try:
@@ -100,7 +108,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             outcome = "client-disconnected"
         finally:
-            self.server.event(event="response", path=u.path, range=value, status=status, bytes=sent, elapsed_ms=(time.monotonic()-begin)*1000, outcome=outcome)
+            self.server.event(event="response", request_id=self.request_id, path=u.path, range=value, status=status, bytes=sent, elapsed_ms=(time.monotonic()-begin)*1000, outcome=outcome)
 
 
 if __name__ == "__main__":
