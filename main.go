@@ -330,12 +330,17 @@ func (b *browser) pinCurrent() {
 		b.status = b.storeWarning
 		return
 	}
-	if len(b.data.Pins) >= 500 || slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == e.URL }) {
-		b.status = "登録済み、または登録件数が上限に達しています。"
+	if slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == e.URL }) {
+		b.status = "登録済みです。"
+		return
+	}
+	if len(b.data.Pins) >= 500 {
+		b.status = "登録は500件までです。登録済みタブから不要な項目を削除してください。"
+		b.history, b.showLibrary = false, true
 		return
 	}
 	b.data.Pins = putFirst(b.data.Pins, e, 500)
-	b.history, b.showLibrary = false, true
+	b.showLibrary = true
 	if b.persist() {
 		b.status = e.Kind + "を登録しました。"
 	}
@@ -472,7 +477,11 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.navigate(mylists)
 			}
 			saved, _ := canonical(b.current())
-			if ui.Button(c, "☆ 登録").Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
+			pinLabel := "☆ 登録"
+			if slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == saved }) {
+				pinLabel = "★ 登録済み"
+			}
+			if ui.Button(c, pinLabel).Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
 				b.pinCurrent()
 			}
 			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
