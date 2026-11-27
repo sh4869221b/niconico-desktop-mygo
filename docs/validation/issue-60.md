@@ -35,7 +35,7 @@ Get-Process measure60.test | Select-Object Id,ProcessName,MainWindowTitle
 powershell -NoProfile -File tools/issue60/probe.ps1 -ProcessId <上で確認したPID> -Log probe-baseline.jsonl
 ```
 
-プローブは Ctrl+Space を 40 回送信する。測定ウィンドウが前面でなくなれば停止する。最初は保存せず、送信数と `probe-handled` 数が一致することを確認する。IME 等が横取りした場合はその試行を入力遅延測定に使わず、Tab/スクロールの録画を残す。
+プローブは F8 を 40 回送信する。測定ウィンドウが前面でなくなれば停止する。最初は保存せず、送信数と `probe-handled` 数が一致することを確認する。IME 等が横取りした場合はその試行を入力遅延測定に使わず、Tab/スクロールの録画を残す。
 次に新しいログ名でプローブを動かしながら保存する。
 送信スクリプトの start_utc_ms と UI の probe-handled.utc_ns / 1,000,000 を順番に対応付ける。SendWait 自身も待つため、送信間隔を固定レートだと解釈しない。処理順や数が合わない試行は対応付け不可と記録する。
 

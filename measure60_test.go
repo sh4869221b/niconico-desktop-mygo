@@ -137,10 +137,10 @@ func TestMeasure60(t *testing.T) {
 					}
 					ui.TextInput(c, &probe).Label("入力応答プローブ")
 				})
-				if c.Shortcut(ui.Ctrl, ui.KeySpace) {
+				if c.Shortcut(0, ui.KeyF8) {
 					event60("probe-handled", map[string]any{})
 				}
-				ui.Text(c, "Ctrl+Space は処理時刻を記録。Tab と左の登録一覧スクロールを保存と同時に操作してください。")
+				ui.Text(c, "F8 は処理時刻を記録。Tab と左の登録一覧スクロールを保存と同時に操作してください。")
 				ui.Row(c).Grow(1).MinHeight(0).Children(func() { b.sidebar(c) })
 				ui.Text(c, b.status)
 			})

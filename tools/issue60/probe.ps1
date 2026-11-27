@@ -26,7 +26,7 @@ for ($i=0; $i -lt $Count; $i++) {
     [void][Issue60Foreground]::GetWindowThreadProcessId($hwnd, [ref]$foregroundProcess)
     if ($foregroundProcess -ne $ProcessId) { throw 'Measurement window lost foreground; stopped.' }
     $start = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    [System.Windows.Forms.SendKeys]::SendWait('^ ')
+    [System.Windows.Forms.SendKeys]::SendWait('{F8}')
     @{ event='probe-sent'; ordinal=$i; start_utc_ms=$start; return_utc_ms=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() } | ConvertTo-Json -Compress | Add-Content $Log
     Start-Sleep -Milliseconds $IntervalMs
 }
