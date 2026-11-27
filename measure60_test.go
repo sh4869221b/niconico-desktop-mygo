@@ -17,6 +17,22 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// TestMain owns the OS main thread locked by MyGo's initialization. Go test
+// executes individual tests on worker goroutines, which cannot run App.Run.
+var measure60Run = make(chan chan error)
+
+func TestMain(m *testing.M) {
+	finished := make(chan int, 1)
+	go func() { finished <- m.Run() }()
+	select {
+	case result := <-measure60Run:
+		result <- mygo.App.Run()
+		os.Exit(<-finished)
+	case code := <-finished:
+		os.Exit(code)
+	}
+}
+
 var storage60 struct {
 	sync.Mutex
 	rows  []map[string]any
@@ -133,7 +149,9 @@ func TestMeasure60(t *testing.T) {
 		b.win.OnClosed(func() { b.closed = true; mygo.App.Quit() })
 	})
 	t.Logf("isolated profile: %s", dir)
-	if err := mygo.App.Run(); err != nil {
+	result := make(chan error)
+	measure60Run <- result
+	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
 	got, err := loadLibrary(b.libraryPath)
