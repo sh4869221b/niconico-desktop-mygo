@@ -21,7 +21,26 @@ type nativePlayer struct {
 	startAt               time.Duration
 	showComments          bool
 	recorded              bool
+	panel                 nativePlayerPanel
+	description           []descriptionPart
+	allComments           []timedComment
+	allCues               []danmakuCue
+	commentRows           []int
+	commentList           ui.ListState
+	manageNG              bool
+	ngNotice              string
+	pendingNG             commentNGEdit
 }
+
+const defaultNativeVolume = 80
+
+type nativePlayerPanel uint8
+
+const (
+	commentPanel nativePlayerPanel = iota
+	overviewPanel
+	noPlayerPanel
+)
 
 func (p *playerWindow) stopNative() {
 	if n := p.native; n != nil {
@@ -37,7 +56,7 @@ func (p *playerWindow) stopNative() {
 func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &nativePlayer{cancel: cancel, status: "配信を準備しています…", startAt: route.startTime(), showComments: true}
+	n := &nativePlayer{cancel: cancel, status: "配信を準備しています…", commentNotice: "コメントを読み込んでいます…", startAt: route.startTime(), showComments: true}
 	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
 	p.win.Invalidate()
@@ -54,9 +73,9 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		if err == nil {
 			local, _, err = startHLS(ctx, source)
 		}
+		_, _, description := plainDescription(source.watch.Video.Description)
 		mygo.RunOnMain(func() {
 			if !active() {
-
 				return
 			}
 			if err != nil {
@@ -64,9 +83,10 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 				n.status = "独自プレーヤーで再生できませんでした。 " + err.Error()
 			} else if n.stream, err = video.OpenURL(local); err != nil {
 				n.cancel()
-
 				n.status = "Windowsの動画再生機能で配信を開けませんでした。"
 			} else {
+				n.stream.SetVolume(b.nativeVolume / 100)
+				n.description = description
 				n.status = ""
 				p.title = source.title
 				p.win.SetTitle(source.title + " ・ " + appName)
@@ -80,10 +100,11 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		cues := makeDanmakuCues(comments)
 		mygo.RunOnMain(func() {
 			if !active() {
-
 				return
 			}
-			n.comments = cues
+			n.allComments, n.allCues = comments, cues
+			n.applyCommentNG(b.commentNG.blocked)
+			n.commentNotice = ""
 			if err != nil {
 				n.commentNotice = "コメントを取得できませんでした。"
 			} else if len(comments) == 0 {
@@ -120,14 +141,21 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		return
 	}
 	t := c.Theme()
+	b.applyPendingCommentNG(n)
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
-		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "独自プレーヤー（試験版）").Bold()
 			if ui.Button(c, "公式 WebView で開く").Clicked() {
 				b.openPlayerMode(p.target, webPlayback)
 			}
 			if n.stream != nil && ui.Button(c, "コメント切替").Label("コメント表示切替").Clicked() {
 				n.showComments = !n.showComments
+			}
+			if n.stream != nil && ui.Button(c, "コメント一覧").Checked(n.panel == commentPanel).Clicked() {
+				n.togglePanel(commentPanel)
+			}
+			if n.stream != nil && ui.Button(c, "概要欄").Checked(n.panel == overviewPanel).Clicked() {
+				n.togglePanel(overviewPanel)
 			}
 		})
 		s := n.stream
@@ -154,21 +182,32 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 		}
 		current := s.Position()
-		ui.Box(c).Grow(1).FillWidth().MinHeight(0).Children(func() {
-			view := ui.Video(c, s).Fill().Fit(ui.Contain).Background(ui.RGB(0, 0, 0))
-			if n.showComments && s.Ready() && len(n.comments) > 0 {
-				// Use the actual laid-out video size, including during resize.
-				view.DrawOver(func(_ *ui.Painter, r ui.Rect) {
-					r.X, r.Y = 0, 0
-					if n.commentViewport != r {
-						n.commentViewport = r
-						c.Invalidate()
-					}
-				})
-				vw, vh := s.Size()
-				r := n.commentViewport
-				n.danmaku.draw(c, danmakuBounds(r, videoBounds(r, vw, vh)), n.comments, current.Milliseconds())
+		w, h := c.Size()
+		compact := w < 780
+		var body ui.Element
+		if compact {
+			body = ui.Column(c)
+		} else {
+			body = ui.Row(c)
+		}
+		body.FillWidth().Grow(1).MinHeight(0).Gap(8).Padding(0, 8).AlignItems(ui.Stretch).Children(func() {
+			drawNativeVideo(c, n, current)
+			if n.panel == noPlayerPanel {
+				return
 			}
+			panel := ui.Column(c).Padding(6, 8).Gap(5).Border(1, t.Border).Radius(6).Background(t.Background)
+			if compact {
+				panel.Height(min(144, h*0.32)).FillWidth()
+			} else {
+				panel.Width(max(246, min(340, w*0.30))).FillHeight()
+			}
+			panel.Children(func() {
+				if n.panel == overviewPanel {
+					b.drawNativeOverview(c, n)
+				} else {
+					b.drawNativeComments(c, n)
+				}
+			})
 		})
 		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
 			label := "再生"
@@ -176,17 +215,19 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				label = "一時停止"
 			}
 			if ui.Button(c, label).Disabled(!s.Ready()).Clicked() {
-				if s.Playing() {
-					s.Pause()
-				} else {
-					s.Play()
-				}
+				toggleNativePlayback(s)
 			}
 			seconds := current.Seconds()
-			if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).Label("再生位置").Changed() {
+			if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Changed() {
 				s.Seek(time.Duration(seconds * float64(time.Second)))
 			}
 			ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackTime(duration))
+			volume := s.Volume() * 100
+			if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
+				b.nativeVolume = volume
+				s.SetVolume(volume / 100)
+			}
+			ui.Text(c, fmt.Sprintf("音量 %d%%", int(volume+0.5))).Width(68).TextAlign(ui.End)
 			mute := "ミュート"
 			if s.Muted() {
 				mute = "ミュート解除"
@@ -198,9 +239,62 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		if !s.Ready() || s.Buffering() {
 			ui.Text(c, "配信を読み込んでいます…").Padding(4, 12)
 		}
-		if n.showComments && n.commentNotice != "" {
-			ui.Text(c, n.commentNotice).Padding(4, 12)
+	})
+}
+
+func (n *nativePlayer) togglePanel(panel nativePlayerPanel) {
+	if n.panel == panel {
+		n.panel = noPlayerPanel
+	} else {
+		n.panel = panel
+	}
+}
+
+func toggleNativePlayback(s *ui.VideoPlayer) {
+	if s.Playing() {
+		s.Pause()
+	} else {
+		s.Play()
+	}
+}
+
+func drawNativeVideo(c *ui.Context, n *nativePlayer, current time.Duration) {
+	s := n.stream
+	ui.Box(c).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+		vw, vh := s.Size()
+		view := ui.Video(c, s).Fill().Fit(ui.Contain).Background(ui.RGB(0, 0, 0))
+		if s.Ready() && vw > 0 && vh > 0 {
+			view.HitTest(func(x, y float32, r ui.Rect) bool {
+				picture := videoBounds(r, vw, vh)
+				return x >= picture.X && x < picture.X+picture.W && y >= picture.Y && y < picture.Y+picture.H
+			}).Cursor(ui.CursorPointer)
+			if view.Clicked() {
+				toggleNativePlayback(s)
+			}
 		}
+		if n.showComments && s.Ready() && len(n.comments) > 0 {
+			// Use the actual laid-out video size, including during resize.
+			view.DrawOver(func(_ *ui.Painter, r ui.Rect) {
+				r.X, r.Y = 0, 0
+				if n.commentViewport != r {
+					n.commentViewport = r
+					c.Invalidate()
+				}
+			})
+			r := n.commentViewport
+			n.danmaku.draw(c, danmakuBounds(r, videoBounds(r, vw, vh)), n.comments, current.Milliseconds())
+		}
+	})
+}
+
+func (b *browser) drawNativeOverview(c *ui.Context, n *nativePlayer) {
+	ui.Text(c, "概要欄").Bold()
+	if len(n.description) == 0 {
+		ui.Text(c, "概要はありません。").Wrap()
+		return
+	}
+	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+		b.drawDescription(c, n.description)
 	})
 }
 

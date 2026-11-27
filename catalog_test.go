@@ -307,7 +307,7 @@ func TestNativeVideoDescription(t *testing.T) {
 
 func TestDescriptionLinksKeepSeparateStartTimes(t *testing.T) {
 	watch := home + "watch/sm9"
-	_, links := plainDescription(`
+	_, links, _ := plainDescription(`
 		<a href="/watch/sm9?from=60&amp;ref=test">1分</a>
 		<a href="https://nico.ms/sm9?from=60">同じ開始位置</a>
 		https://nico.ms/sm9?from=120。

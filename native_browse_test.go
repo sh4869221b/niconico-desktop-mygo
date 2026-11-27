@@ -36,9 +36,10 @@ func TestBrowseLongListNavigation(t *testing.T) {
 	}
 	// The description link scrolls with the collection.
 	click(p.links[0].title)
-	checkRoute(p.links[0].link)
-	click("戻る")
 	checkRoute(r.target)
+	if app.playbackRequest != 1 {
+		t.Fatal("the inline video link did not open the selected player")
+	}
 	// Reach an item that was outside the initial viewport, after resizing.
 	view.SetSize(1000, 600)
 	for i := 0; i < 22; i++ {

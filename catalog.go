@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/net/html"
 )
 
 const apiHost = "nvapi.nicovideo.jp"
@@ -25,7 +23,6 @@ const maxCatalogPage = 4166 // zero based, preserves the accepted range of exist
 const responseLimit = 4 << 20
 
 var errSignIn = errors.New("ニコニコへのログインが必要です")
-var nicoLink = regexp.MustCompile(`https://[a-zA-Z0-9.]+/[^\s<>"]+`)
 var watchSegment = regexp.MustCompile(`^(?:(?:sm|nm|so)?[0-9]{1,20})$`)
 
 type screenKind uint8
@@ -213,6 +210,7 @@ type catalogPage struct {
 	title, summary, author string
 	searchMode             string
 	items, links           []card
+	description            []descriptionPart
 	more                   bool
 }
 
@@ -234,7 +232,7 @@ func sessionEndpoint(u *url.URL) bool {
 	if u.Scheme != "https" || u.Host != apiHost || u.User != nil {
 		return false
 	}
-	if u.Path == accountSearchPath {
+	if u.Path == accountSearchPath || u.Path == accountStatusPath {
 		return true
 	}
 	const base = "/v1/users/me/mylists"
@@ -264,6 +262,9 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 			return nil, errSignIn
 		}
 		cookie, err := c.session(target.String())
+		if path == accountStatusPath && err != nil && !errors.Is(err, errSignIn) {
+			return nil, err
+		}
 		if err != nil || cookie == nil || cookie.Name != "user_session" || !cookie.Secure ||
 			cookie.Value == "" || cookie.Valid() != nil {
 			return nil, errSignIn
@@ -276,7 +277,7 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		if private && (res.StatusCode == 401 || res.StatusCode == 403) {
+		if private && (res.StatusCode == 401 || res.StatusCode == 403 && path != accountStatusPath) {
 			return nil, errSignIn
 		}
 		return nil, fmt.Errorf("ニコニコから取得できませんでした（HTTP %d）", res.StatusCode)
@@ -505,7 +506,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		if m.Name != "" {
 			p.title = m.Name
 		}
-		p.summary, p.links = plainDescription(m.Description)
+		p.summary, p.links, p.description = plainDescription(m.Description)
 		p.more, rows = hasMore(m.HasNext, r.page, m.TotalItemCount, limit), m.Items
 	} else {
 		return p, errors.New("マイリストの応答形式が変わっています")
@@ -558,81 +559,12 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 		return p, errors.New("指定した動画と異なる動画情報を受け取りました")
 	}
 	p.title = result.Thumb.Title
-	p.summary, p.links = plainDescription(result.Thumb.Description)
+	p.summary, p.links, p.description = plainDescription(result.Thumb.Description)
 	if numeric(result.Thumb.UserID, 9) {
 		p.author = result.Thumb.UserNickname
 		p.links = append([]card{{link: home + "user/" + result.Thumb.UserID + "/video", title: "投稿者の動画一覧"}, {link: home + "user/" + result.Thumb.UserID + "/mylist", title: "投稿者の公開マイリスト"}}, p.links...)
 	}
 	return p, nil
-}
-
-func plainDescription(value string) (string, []card) {
-	var text strings.Builder
-	var links []card
-	seen := map[string]bool{}
-	add := func(raw string) {
-		raw = strings.TrimRight(raw, "。．、！？：；,.)]}!?;）】」")
-		link, kind := canonical(raw)
-		if len(links) >= 24 || (kind != "動画" && kind != "マイリスト" && kind != "ユーザー") {
-			return
-		}
-		r := routeFor(raw)
-		if r.kind == screenVideo {
-			u, _ := url.Parse(r.target)
-			if from := u.Query().Get("from"); from != "" {
-				link += "?" + url.Values{"from": {from}}.Encode()
-			}
-		}
-		if seen[link] {
-			return
-		}
-		seen[link] = true
-		links = append(links, card{link: r.target, title: kind + " · " + strings.TrimPrefix(link, home)})
-	}
-	z := html.NewTokenizer(strings.NewReader(value))
-	var ignored string
-	for {
-		switch z.Next() {
-		case html.ErrorToken:
-			return strings.TrimSpace(text.String()), links
-		case html.StartTagToken, html.SelfClosingTagToken:
-			t := z.Token()
-			if ignored != "" {
-				continue
-			}
-			if t.Data == "script" || t.Data == "style" {
-				ignored = t.Data
-				continue
-			}
-			if t.Data == "br" || t.Data == "p" || t.Data == "div" {
-				text.WriteByte('\n')
-			}
-			if t.Data == "a" {
-				for _, a := range t.Attr {
-					if a.Key == "href" {
-						link := a.Val
-						if strings.HasPrefix(link, "/") && !strings.HasPrefix(link, "//") {
-							link = strings.TrimSuffix(home, "/") + link
-						}
-						add(link)
-					}
-				}
-			}
-		case html.EndTagToken:
-			if t := z.Token(); t.Data == ignored {
-				ignored = ""
-			}
-		case html.TextToken:
-			if ignored != "" {
-				continue
-			}
-			s := string(z.Text())
-			text.WriteString(s)
-			for _, link := range nicoLink.FindAllString(s, 24) {
-				add(link)
-			}
-		}
-	}
 }
 
 func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {

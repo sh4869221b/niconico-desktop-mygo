@@ -52,10 +52,14 @@ func savePlayback(path string, m playbackMode) error {
 	if err != nil {
 		return err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	return writeSettings(path, data)
+}
+
+func writeSettings(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".player-*.tmp")
+	f, err := os.CreateTemp(filepath.Dir(path), ".settings-*.tmp")
 	if err != nil {
 		return err
 	}

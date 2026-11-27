@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -20,7 +21,7 @@ func readSessionCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), targ
 	}
 	values, err := list(mygo.CookieFilter{URL: target, Name: "user_session"})
 	if err != nil {
-		return nil, errSignIn
+		return nil, errors.New("ログイン情報を読み取れませんでした")
 	}
 	for _, value := range values {
 		if value.Name != "user_session" || !value.Secure ||
@@ -181,6 +182,7 @@ func (b *browser) closeOfficial() {
 		// Destroy the previous view rather than leaving hidden playback running.
 		go mygo.RunOnMain(view.Destroy)
 	}
+	b.checkLogin()
 }
 
 func (b *browser) leaveOfficial() {
@@ -343,13 +345,18 @@ func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
 	if p.author != "" {
 		ui.Text(scope, p.author).TextColor(scope.Theme().TextMuted).Wrap()
 	}
-	if p.summary != "" {
+	if len(p.description) != 0 && p.summary != "" {
+		b.drawDescription(scope, p.description)
+	} else if p.summary != "" {
 		ui.Text(scope, p.summary).Wrap()
 	}
 	for i, link := range p.links {
+		if slices.ContainsFunc(p.description, func(part descriptionPart) bool { return part.text != "" && part.link.title == link.title }) {
+			continue
+		}
 		row := scope.Key(fmt.Sprintf("link-%d", i))
 		if ui.Button(row, link.title).Clicked() {
-			b.navigate(link.link)
+			b.followDescription(link.link)
 		}
 	}
 }

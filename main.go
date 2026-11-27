@@ -30,6 +30,9 @@ type browser struct {
 	history, loaded, closed      bool
 	showLibrary                  bool
 	session                      *mygo.Session
+	loginState                   loginState
+	loginCheck                   uint64
+	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
 	officialTarget               string
 	catalog                      catalog
@@ -46,6 +49,8 @@ type browser struct {
 	playMode                     playbackMode
 	showPlaybackSettings         bool
 	playbackPath, playbackNotice string
+	commentNG                    commentNG
+	nativeVolume                 float64
 }
 
 func main() {
@@ -64,6 +69,7 @@ func main() {
 
 func (b *browser) start(initial string) {
 	b.playMode = webPlayback
+	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
@@ -72,6 +78,7 @@ func (b *browser) start(initial string) {
 			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
 		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
+		b.commentNG, _ = loadCommentNG(filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json"))
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
 			b.storeWarning = "既存の保存ファイルを読み込めません。上書きは行いません。"
@@ -94,12 +101,20 @@ func (b *browser) start(initial string) {
 	})
 	b.win.OnClosed(func() {
 		b.closed = true
+		if b.stopLoginWatch != nil {
+			b.stopLoginWatch()
+		}
+		if b.loginCancel != nil {
+			b.loginCancel()
+		}
 		b.cancelLoad()
 		if play := b.player; play != nil {
 			play.win.Close()
 		}
 	})
 	b.openNative(routeFor(home), true)
+	b.watchLogin()
+	b.checkLogin()
 	if initial != home {
 		b.navigate(initial)
 	}
@@ -192,6 +207,7 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.checkLogin()
 		b.status = "ニコニコ公式ページ"
 		if !b.loaded {
 			b.status = "対応するページを開いてください。"
@@ -459,8 +475,18 @@ func (b *browser) toolbar(c *ui.Context) {
 			if ui.Button(c, "設定").Clicked() {
 				b.showPlaybackSettings = !b.showPlaybackSettings
 			}
-			if ui.Button(c, "ログイン").Clicked() {
-				b.navigate(login)
+			loginLabel := "ログイン"
+			loginTarget := login
+			if b.loginState == loginAuthenticated {
+				loginLabel = "アカウント"
+				loginTarget = "https://account.nicovideo.jp/my/account"
+			}
+			if ui.Button(c, loginLabel).Clicked() {
+				b.navigate(loginTarget)
+			}
+			ui.Text(c, b.loginState.label()).Role(ui.RoleStatus).TextColor(t.TextMuted)
+			if ui.Button(c, "再確認").Label("ログイン状態を再確認").Disabled(b.loginState == loginChecking).Clicked() {
+				b.checkLogin()
 			}
 		})
 	})

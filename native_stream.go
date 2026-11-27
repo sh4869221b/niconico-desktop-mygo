@@ -25,7 +25,7 @@ type mediaTrack struct {
 	QualityLevel int
 }
 type watchData struct {
-	Video  struct{ Title string }
+	Video  struct{ ID, Title, Description string }
 	Client struct{ WatchTrackID string }
 	Media  struct {
 		Domand struct {
@@ -49,6 +49,8 @@ type timedComment struct {
 	Body     string
 	VposMs   int64
 	Commands []string
+	UserID   json.RawMessage
+	author   commentAuthor
 }
 
 func streamClient(jar http.CookieJar) *http.Client {
@@ -213,6 +215,8 @@ func nativeComments(ctx context.Context, w watchData) ([]timedComment, error) {
 			if c.Body == "" {
 				continue
 			}
+			c.author = authorForComment(w.Video.ID, c.UserID, c.Commands)
+			c.UserID = nil
 			out = append(out, c)
 		}
 	}

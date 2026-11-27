@@ -109,6 +109,7 @@ type danmakuCue struct {
 	body       string
 	start, end int64
 	style      commentStyle
+	author     commentAuthor
 }
 
 func makeDanmakuCues(comments []timedComment) []danmakuCue {
@@ -121,7 +122,7 @@ func makeDanmakuCues(comments []timedComment) []danmakuCue {
 			start -= 1000
 			lifetime = scrollLifetime
 		}
-		cues = append(cues, danmakuCue{c.Body, start, start + lifetime, style})
+		cues = append(cues, danmakuCue{c.Body, start, start + lifetime, style, c.author})
 	}
 	slices.SortStableFunc(cues, func(a, b danmakuCue) int {
 		if a.start < b.start {
@@ -228,11 +229,12 @@ type danmakuOverlay struct {
 	width, height float32
 	// The last video time and next comment allow incremental playback. On a seek,
 	// prime the lanes from earlier comments instead of depending on wall-clock time.
-	last     int64
-	next     int
-	lanes    commentLanes
-	active   []drawnComment
-	measures map[commentMeasureKey]commentMeasure
+	last        int64
+	next        int
+	lanes       commentLanes
+	active      []drawnComment
+	measures    map[commentMeasureKey]commentMeasure
+	cuesChanged bool
 }
 
 // The official player lets comments cross the letterbox bars of a narrow
@@ -251,7 +253,8 @@ func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue,
 	if resized {
 		clear(d.measures)
 	}
-	if resized || ms < d.last || ms-d.last >= scrollLifetime {
+	if resized || d.cuesChanged || ms < d.last || ms-d.last >= scrollLifetime {
+		d.cuesChanged = false
 		d.width, d.height = r.W, r.H
 		d.lanes.reset(r.H)
 		clear(d.active)
