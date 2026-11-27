@@ -51,6 +51,7 @@ type browser struct {
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
 	nativeVolume                 float64
+	settingsNG                   nativePlayer
 
 	searchSortPath, searchSortNotice string
 	searchDefault                    searchSortPreference

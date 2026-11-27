@@ -61,13 +61,20 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 		return
 	}
 	n.pendingNG = commentNGEdit{}
-	if err := b.commentNG.change(edit.author, edit.block); err != nil {
+	title := ""
+	if b.player != nil {
+		title = b.player.title
+	}
+	if err := b.commentNG.changeWithDetails(edit.author, edit.block, title, time.Now()); err != nil {
 		n.ngNotice = "NG設定を保存できませんでした。"
 		return
 	}
 	n.applyCommentNG(b.commentNG.blocked)
+	if b.player != nil && b.player.native != nil && b.player.native != n {
+		b.player.native.applyCommentNG(b.commentNG.blocked)
+	}
 	if edit.block {
-		n.ngNotice = "NGに登録しました。"
+		n.ngNotice = "NGに登録しました。" + commentNGScope(edit.author)
 	} else {
 		n.ngNotice = "NGを解除しました。"
 	}
@@ -133,6 +140,10 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		}
 		line.ContextMenu(func(m *ui.Menu) {
 			n.follow.manual = true
+			if row.author.ID != "" {
+				m.Item(commentNGScope(row.author)).Disabled(true)
+				m.Separator()
+			}
 			if m.Item("このユーザーを NG").Disabled(row.author.ID == "" || b.commentNG.path == "").Chosen() {
 				n.pendingNG = commentNGEdit{row.author, true}
 				c.Invalidate()
@@ -177,11 +188,28 @@ func (b *browser) drawCommentNG(c *ui.Context, n *nativePlayer) {
 			label = "匿名 " + author.Video + " / " + author.ID[len(author.ID)-8:]
 		}
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
-			ui.Text(c, label).Grow(1).MinWidth(0).Wrap()
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+				ui.Text(c, label).Wrap()
+				ui.Text(c, commentNGScope(author)).Wrap()
+				meta := b.commentNG.metadata[author]
+				if meta.Title != "" {
+					ui.Text(c, "登録した動画: "+meta.Title).Wrap()
+				}
+				if !meta.AddedAt.IsZero() {
+					ui.Text(c, "登録日: "+meta.AddedAt.Local().Format("2006-01-02")).Wrap()
+				}
+			})
 			if ui.Button(c, "解除").Label("解除 " + label).Clicked() {
 				n.pendingNG = commentNGEdit{author, false}
 				c.Invalidate()
 			}
 		})
 	}).Grow(1).MinHeight(0).FillWidth()
+}
+
+func commentNGScope(a commentAuthor) string {
+	if a.Video != "" {
+		return "この動画だけで非表示にします。匿名投稿者を別の動画とは結び付けません。"
+	}
+	return "この公開ユーザーIDをすべての動画で非表示にします。"
 }

@@ -9,10 +9,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 )
 
 const maxCommentNGEntries = 2048
-const maxCommentNGBytes = 256 << 10
+const maxCommentNGBytes = 4 << 20
 
 var anonymousCommentID = regexp.MustCompile(`^[A-Za-z0-9_-]{27}$`)
 
@@ -51,9 +52,19 @@ func authorForComment(video string, raw json.RawMessage, commands []string) comm
 }
 
 type commentNG struct {
-	path    string
-	blocked map[commentAuthor]bool
-	entries []commentAuthor
+	path     string
+	blocked  map[commentAuthor]bool
+	entries  []commentAuthor
+	metadata map[commentAuthor]commentNGMetadata
+}
+
+type commentNGMetadata struct {
+	Title   string    `json:"title,omitempty"`
+	AddedAt time.Time `json:"addedAt,omitempty"`
+}
+type commentNGRecord struct {
+	commentAuthor
+	commentNGMetadata
 }
 
 func loadCommentNG(path string) (commentNG, error) {
@@ -66,19 +77,22 @@ func loadCommentNG(path string) (commentNG, error) {
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, maxCommentNGBytes+1))
-	var entries []commentAuthor
+	var entries []commentNGRecord
 	if err != nil || len(data) > maxCommentNGBytes || json.Unmarshal(data, &entries) != nil ||
 		entries == nil || len(entries) > maxCommentNGEntries {
 		return commentNG{}, errors.New("invalid comment NG settings")
 	}
 	blocked := make(map[commentAuthor]bool, len(entries))
-	for _, a := range entries {
+	metadata := make(map[commentAuthor]commentNGMetadata, len(entries))
+	for _, record := range entries {
+		a := record.commentAuthor
 		if !a.valid() {
 			return commentNG{}, errors.New("invalid comment author in NG settings")
 		}
 		blocked[a] = true
+		metadata[a] = record.commentNGMetadata
 	}
-	return commentNG{path, blocked, sortedCommentAuthors(blocked)}, nil
+	return commentNG{path: path, blocked: blocked, entries: sortedCommentAuthors(blocked), metadata: metadata}, nil
 }
 
 func sortedCommentAuthors(blocked map[commentAuthor]bool) []commentAuthor {
@@ -96,6 +110,10 @@ func sortedCommentAuthors(blocked map[commentAuthor]bool) []commentAuthor {
 }
 
 func (ng *commentNG) change(a commentAuthor, block bool) error {
+	return ng.changeWithDetails(a, block, "", time.Now())
+}
+
+func (ng *commentNG) changeWithDetails(a commentAuthor, block bool, title string, now time.Time) error {
 	if ng.path == "" || !a.valid() {
 		return errors.New("invalid comment NG change")
 	}
@@ -114,14 +132,31 @@ func (ng *commentNG) change(a commentAuthor, block bool) error {
 	} else {
 		delete(blocked, a)
 	}
+	metadata := maps.Clone(ng.metadata)
+	if metadata == nil {
+		metadata = make(map[commentAuthor]commentNGMetadata)
+	}
+	if block {
+		runed := []rune(strings.TrimSpace(title))
+		if len(runed) > 200 {
+			runed = runed[:200]
+		}
+		metadata[a] = commentNGMetadata{string(runed), now.UTC()}
+	} else {
+		delete(metadata, a)
+	}
 	entries := sortedCommentAuthors(blocked)
-	data, err := json.Marshal(entries)
+	records := make([]commentNGRecord, 0, len(entries))
+	for _, author := range entries {
+		records = append(records, commentNGRecord{author, metadata[author]})
+	}
+	data, err := json.Marshal(records)
 	if err == nil {
 		err = writeSettings(ng.path, data)
 	}
 	if err != nil {
 		return err
 	}
-	ng.blocked, ng.entries = blocked, entries
+	ng.blocked, ng.entries, ng.metadata = blocked, entries, metadata
 	return nil
 }

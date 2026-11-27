@@ -91,6 +91,7 @@ func (b *browser) changePlayback(m playbackMode) {
 }
 
 func (b *browser) drawPlaybackSettings(c *ui.Context) {
+	b.applyPendingCommentNG(&b.settingsNG)
 	ui.Column(c).FillWidth().Padding(8, 14).Gap(6).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "再生プレーヤー").Bold()
@@ -111,5 +112,15 @@ func (b *browser) drawPlaybackSettings(c *ui.Context) {
 			}
 		})
 		ui.Text(c, "どちらも別ウィンドウで開きます。独自プレーヤーで再生できない場合は公式プレーヤーで開けます。").Wrap()
+		if ui.Button(c, "ローカルNG管理").Checked(b.settingsNG.manageNG).Clicked() {
+			b.settingsNG.manageNG = !b.settingsNG.manageNG
+		}
+		if b.settingsNG.manageNG {
+			ui.Text(c, "この端末のNG設定（公式プレーヤーには適用されません）").Wrap()
+			if b.settingsNG.ngNotice != "" {
+				ui.Text(c, b.settingsNG.ngNotice).Role(ui.RoleStatus).Wrap()
+			}
+			ui.Column(c).Height(180).FillWidth().Children(func() { b.drawCommentNG(c, &b.settingsNG) })
+		}
 	})
 }
