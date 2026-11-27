@@ -7,6 +7,7 @@ type libraryRemoval struct {
 	index      int
 	history    bool
 	next       string
+	previous   string
 	player     *playerWindow
 	suppressed bool
 }
@@ -33,6 +34,9 @@ func (b *browser) remove(e entry) {
 		return
 	}
 	undo := &libraryRemoval{item: (*items)[i], index: i, history: b.history}
+	if i > 0 {
+		undo.previous = (*items)[i-1].URL
+	}
 	if i+1 < len(*items) {
 		undo.next = (*items)[i+1].URL
 	}
@@ -70,6 +74,11 @@ func (b *browser) undoLibraryRemoval() {
 			return
 		}
 		i := slices.IndexFunc(*items, func(x entry) bool { return x.URL == u.next })
+		if i < 0 && u.previous != "" {
+			if previous := slices.IndexFunc(*items, func(x entry) bool { return x.URL == u.previous }); previous >= 0 {
+				i = previous + 1
+			}
+		}
 		if i < 0 {
 			i = min(u.index, len(*items))
 		}

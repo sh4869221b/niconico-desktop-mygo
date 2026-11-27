@@ -53,3 +53,23 @@ func TestLibraryUndoRestoresOriginalOrderAndPersistence(t *testing.T) {
 		}
 	}
 }
+
+func TestUndoLastRowKeepsOrderAfterNewEntry(t *testing.T) {
+	a, _ := makeEntry(home+"watch/sm1", "A")
+	bEntry, _ := makeEntry(home+"watch/sm2", "B")
+	cEntry, _ := makeEntry(home+"watch/sm3", "C")
+	d, _ := makeEntry(home+"watch/sm4", "D")
+	b := &browser{libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{Pins: []entry{a, bEntry, cEntry}}}
+	b.remove(cEntry)
+	b.data.Pins = putFirst(b.data.Pins, d, 500)
+	b.undoLibraryRemoval()
+	want := []entry{d, a, bEntry, cEntry}
+	if len(b.data.Pins) != len(want) {
+		t.Fatal("undo lost an entry")
+	}
+	for i, e := range want {
+		if b.data.Pins[i] != e {
+			t.Fatal("new entry changed restored order", b.data.Pins)
+		}
+	}
+}
