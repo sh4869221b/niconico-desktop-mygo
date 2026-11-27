@@ -69,7 +69,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &nativePlayer{
-		cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
+		cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(), retryAt: route.startTime(),
 		showComments: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
 	}
 	p.native, p.target = n, route.target
@@ -155,7 +155,10 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 }
 
 func (n *nativePlayer) failStream(message string) {
-	n.retryAt, n.retryPaused = n.startAt, n.pauseRequested
+	if n.startAt > 0 {
+		n.retryAt = n.startAt
+	}
+	n.retryPaused = n.pauseRequested
 	if n.stream != nil {
 		n.retryPaused = !n.stream.Playing()
 		if n.stream.Ready() && !n.stream.Preparing() {
