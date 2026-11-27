@@ -31,6 +31,7 @@ type browser struct {
 	showLibrary                  bool
 	session                      *mygo.Session
 	loginState                   loginState
+	loginBusy                    bool
 	loginCheck                   uint64
 	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
@@ -491,7 +492,7 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.navigate(loginTarget)
 			}
 			ui.Text(c, b.loginState.label()).Role(ui.RoleStatus).TextColor(t.TextMuted)
-			if ui.Button(c, "再確認").Label("ログイン状態を再確認").Disabled(b.loginState == loginChecking).Clicked() {
+			if ui.Button(c, "再確認").Label("ログイン状態を再確認").Disabled(b.loginBusy).Clicked() {
 				b.checkLogin()
 			}
 		})
