@@ -40,6 +40,7 @@ type browser struct {
 	navigation                   []screenRoute
 	index                        int
 	result                       catalogPage
+	knownVideoDetails            map[string]videoDetails
 	resultErr                    error
 	busy                         bool
 	cancel                       context.CancelFunc

@@ -227,6 +227,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	details                                           videoDetails
 }
 
 type catalogPage struct {
@@ -236,6 +237,7 @@ type catalogPage struct {
 	description            []descriptionPart
 	tags                   []string
 	publisher              videoPublisher
+	details                videoDetails
 	emptyNotice            string
 	more                   bool
 }
@@ -345,6 +347,7 @@ func makeVideo(id, title string, duration, views, comments int) (card, bool) {
 	if item.title == "" {
 		item.title = id
 	}
+	item.details = videoDetails{duration: fmt.Sprintf("%d:%02d", duration/60, duration%60), views: strconv.Itoa(views), comments: strconv.Itoa(comments)}
 	item.summary = fmt.Sprintf("%d:%02d  ·  再生 %d  ·  コメント %d", duration/60, duration%60, views, comments)
 	return item, true
 }
@@ -361,7 +364,7 @@ func searchParameters(r screenRoute) url.Values {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
-		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId"},
+		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId,startTime"},
 		"_sort":  {direction + sort.snapshotKey}, "_limit": {strconv.Itoa(searchPageSize)}, "_offset": {strconv.Itoa(r.page * searchPageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
@@ -389,6 +392,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	}
 	type row struct {
 		ContentID, Title, ThumbnailURL             string
+		StartTime                                  string
 		LengthSeconds, ViewCounter, CommentCounter int
 		Tags                                       json.RawMessage
 		UserID, ChannelID                          json.RawMessage
@@ -403,6 +407,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	p.more = (r.page+1)*searchPageSize < min(result.Meta.TotalCount, snapshotResultLimit)
 	for _, item := range result.Data {
 		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
+			v.details.posted = videoPostedDate(item.StartTime)
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
 			v.tags = searchVideoTags(item.Tags)
 			v.owner = (publisherMetadata{ID: item.ChannelID}).publisher("channel").videos
@@ -418,6 +423,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 type apiVideo struct {
 	ID, Title               string
 	Duration                int
+	RegisteredAt            string
 	Count                   struct{ View, Comment int }
 	Owner                   publisherMetadata
 	Tag, Tags               json.RawMessage
@@ -438,6 +444,7 @@ func (v apiVideo) thumbnailURL() string {
 
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
+	x.details.posted = videoPostedDate(v.RegisteredAt)
 	x.thumbnail = v.thumbnailURL()
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
@@ -595,14 +602,18 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 	var result struct {
 		Status string `xml:"status,attr"`
 		Thumb  struct {
-			ID           string `xml:"video_id"`
-			Title        string `xml:"title"`
-			Description  string `xml:"description"`
-			UserID       string `xml:"user_id"`
-			UserNickname string `xml:"user_nickname"`
-			ChannelID    string `xml:"ch_id"`
-			ChannelName  string `xml:"ch_name"`
-			Tags         []struct {
+			ID            string `xml:"video_id"`
+			Title         string `xml:"title"`
+			Length        string `xml:"length"`
+			FirstRetrieve string `xml:"first_retrieve"`
+			ViewCounter   string `xml:"view_counter"`
+			CommentNum    string `xml:"comment_num"`
+			Description   string `xml:"description"`
+			UserID        string `xml:"user_id"`
+			UserNickname  string `xml:"user_nickname"`
+			ChannelID     string `xml:"ch_id"`
+			ChannelName   string `xml:"ch_name"`
+			Tags          []struct {
 				Domain string   `xml:"domain,attr"`
 				Items  []string `xml:"tag"`
 			} `xml:"tags"`
@@ -615,6 +626,7 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 		return p, errors.New("指定した動画と異なる動画情報を受け取りました")
 	}
 	p.title = result.Thumb.Title
+	p.details = videoDetails{duration: videoLength(result.Thumb.Length), posted: videoPostedDate(result.Thumb.FirstRetrieve), views: videoCount(result.Thumb.ViewCounter), comments: videoCount(result.Thumb.CommentNum)}
 	for _, group := range result.Thumb.Tags {
 		if group.Domain == "jp" || group.Domain == "" {
 			for _, name := range group.Items {

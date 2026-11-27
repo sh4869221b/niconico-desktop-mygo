@@ -42,6 +42,9 @@ func (b *browser) navigate(link string) {
 		return
 	}
 	r := routeFor(link)
+	if r.kind == screenVideo {
+		b.rememberVideoDetails(r)
+	}
 	if r.kind == screenOfficial {
 		b.openOfficial(link)
 		return
@@ -99,6 +102,7 @@ func (b *browser) refreshNative() {
 		return
 	}
 	r, epoch := b.navigation[b.index], b.epoch
+	fallback := b.knownVideoDetails[r.link]
 	b.result, b.resultErr, b.busy, b.status = catalogPage{}, nil, r.kind != screenHome, ""
 	if !b.busy {
 		b.win.Invalidate()
@@ -109,6 +113,9 @@ func (b *browser) refreshNative() {
 	go func() {
 		defer cancel()
 		p, err := b.catalog.load(ctx, r)
+		if r.kind == screenVideo {
+			p.details = p.details.withFallback(fallback)
+		}
 		mygo.RunOnMain(func() {
 			if b.closed || b.official || b.epoch != epoch {
 				return
@@ -224,6 +231,9 @@ func (b *browser) drawNative(c *ui.Context) {
 			ui.Text(scope, label).TextColor(t.TextMuted)
 		}
 		ui.Text(scope, title).FontSize(24).Bold().Wrap()
+		if r.kind == screenVideo {
+			ui.Text(scope, videoDetailText(r, p)).Wrap().TextColor(t.TextMuted)
+		}
 		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			switch r.kind {
 			case screenSearch:
