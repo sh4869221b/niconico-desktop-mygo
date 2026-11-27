@@ -13,34 +13,40 @@ import (
 )
 
 type nativePlayer struct {
-	cancel                context.CancelFunc
-	stream                *ui.VideoPlayer
-	relay                 *hlsRelay
-	startDeadline         time.Duration
-	loadingStream         bool
-	pauseRequested        bool
-	stagedComments        *nativeCommentData
-	comments              []danmakuCue
-	danmaku               danmakuOverlay
-	commentViewport       ui.Rect
-	status, commentNotice string
-	startAt               time.Duration
-	showComments          bool
-	recorded              bool
-	hideCommentPanel      bool
-	showOverview          bool
-	description           []descriptionPart
-	publisher             videoPublisher
-	allComments           []timedComment
-	allCues               []danmakuCue
-	commentRows           []int
-	commentList           ui.ListState
-	manageNG              bool
-	ngNotice              string
-	pendingNG             commentNGEdit
-	follow                commentFollow
-	tags                  []string
-	tagNotice             string
+	cancel                           context.CancelFunc
+	stream                           *ui.VideoPlayer
+	relay                            *hlsRelay
+	startDeadline                    time.Duration
+	loadingStream                    bool
+	pauseRequested                   bool
+	stagedComments                   *nativeCommentData
+	comments                         []danmakuCue
+	danmaku                          danmakuOverlay
+	commentViewport                  ui.Rect
+	status, commentNotice            string
+	startAt                          time.Duration
+	showComments                     bool
+	recorded                         bool
+	hideCommentPanel                 bool
+	showOverview                     bool
+	description                      []descriptionPart
+	publisher                        videoPublisher
+	allComments                      []timedComment
+	allCues                          []danmakuCue
+	commentRows                      []int
+	commentList                      ui.ListState
+	manageNG                         bool
+	ngNotice                         string
+	pendingNG                        commentNGEdit
+	follow                           commentFollow
+	tags                             []string
+	tagNotice                        string
+	metadataCtx                      context.Context
+	metadataRoute                    screenRoute
+	metadataWatch                    watchData
+	tagLoading, tagFailed            bool
+	commentsLoading, commentsFailed  bool
+	tagGeneration, commentGeneration uint64
 }
 
 const defaultNativeVolume = 80
@@ -116,37 +122,12 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		if err != nil || ctx.Err() != nil {
 			return
 		}
-		go func() {
-			tags, publisher, err := playbackDetails(ctx, b.catalog, route, source.watch)
-			mygo.RunOnMain(func() {
-				if active() && ctx.Err() == nil {
-					n.tags, n.tagNotice = tags, "タグはありません。"
-					n.publisher = publisher
-					if err != nil {
-						n.tagNotice = "タグを取得できませんでした。"
-					}
-					p.win.Invalidate()
-				}
-			})
-		}()
-		_, _, description := plainDescription(source.watch.Video.Description)
 		mygo.RunOnMain(func() {
 			if active() && ctx.Err() == nil {
-				n.description = description
-				p.win.Invalidate()
-			}
-		})
-		comments, err := nativeComments(ctx, source.watch)
-		details := &nativeCommentData{rows: comments, cues: makeDanmakuCues(comments)}
-		if err != nil {
-			details.notice = "コメントを取得できませんでした。"
-		} else if len(comments) == 0 {
-			details.notice = "表示できる日本語コメントはありません。"
-		}
-		mygo.RunOnMain(func() {
-			if active() && ctx.Err() == nil {
-				n.stagedComments = details
-				p.win.Invalidate()
+				n.metadataCtx, n.metadataRoute, n.metadataWatch = ctx, route, source.watch
+				_, _, n.description = plainDescription(source.watch.Video.Description)
+				b.fetchNativeTags(p, n)
+				b.fetchNativeComments(p, n)
 			}
 		})
 	}()
@@ -416,6 +397,9 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 			})
 			if n.tagNotice != "" {
 				b.drawVideoTags(c, n.tags, n.tagNotice)
+			}
+			if n.tagFailed && ui.Button(c, "タグを再取得").Disabled(n.tagLoading).Clicked() {
+				b.fetchNativeTags(b.player, n)
 			}
 		})
 	})

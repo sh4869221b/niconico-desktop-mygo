@@ -104,6 +104,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		b.drawCommentNG(c, n)
 		return
 	}
+	if n.commentsFailed && ui.Button(c, "コメントを再取得").Disabled(n.commentsLoading).Clicked() {
+		b.fetchNativeComments(b.player, n)
+	}
 	if len(n.commentRows) == 0 {
 		msg := n.commentNotice
 		if msg == "" {
