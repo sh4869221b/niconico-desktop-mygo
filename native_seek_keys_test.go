@@ -2,6 +2,7 @@ package main
 
 import (
 	"image"
+	"math"
 	"testing"
 	"time"
 
@@ -43,6 +44,20 @@ func TestLongVideoSeekKeys(t *testing.T) {
 		if s.Playing() {
 			t.Fatal("seek resumed paused video")
 		}
+	}
+}
+
+func TestSeekKeysKeepFractionalPointerOffset(t *testing.T) {
+	seconds := 123.45
+	v := ui.NewTester(func(c *ui.Context) { ui.Slider(c, &seconds, 0, 7200).KeyboardStep(5, 30).Label("seek") }, 500, 80)
+	v.Key(0, ui.KeyTab)
+	v.Key(0, ui.KeyRight)
+	if math.Abs(seconds-128.45) > 1e-9 {
+		t.Fatalf("relative seek snapped fractional time: %f", seconds)
+	}
+	v.Key(0, ui.KeyPageUp)
+	if math.Abs(seconds-158.45) > 1e-9 {
+		t.Fatalf("large seek snapped fractional time: %f", seconds)
 	}
 }
 

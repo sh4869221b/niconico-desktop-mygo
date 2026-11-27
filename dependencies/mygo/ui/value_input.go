@@ -191,8 +191,9 @@ func sliderInput(n *node) {
 	if settings.step > 0 {
 		step = settings.step
 	}
+	snapStep := step
 	set := func(v float64) {
-		v = snap(max(b.lo, min(b.hi, v)), b.lo, b.hi, step)
+		v = snap(max(b.lo, min(b.hi, v)), b.lo, b.hi, snapStep)
 		if *b.value != v {
 			*b.value = v
 			n.st.markChanged()
@@ -221,6 +222,8 @@ func sliderInput(n *node) {
 	}
 	if settings.keyStep > 0 {
 		step = settings.keyStep
+	} else {
+		snapStep = step
 	}
 	pageStep := max(step, (b.hi-b.lo)/10)
 	if settings.pageStep > 0 {
