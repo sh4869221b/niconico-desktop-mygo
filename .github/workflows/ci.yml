@@ -26,7 +26,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test
-        run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows
+        run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows github.com/egoist/mygo/internal/gpu/d3d11
       - name: Vet
         run: go vet -mod=readonly ./...
       - name: Build and package
