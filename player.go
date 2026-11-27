@@ -20,6 +20,7 @@ type playerWindow struct {
 	target, title, status  string
 	commentLanguageWarning bool
 	historySuppressed      map[string]bool
+	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
 	playedWatch            screenRoute
@@ -492,8 +493,13 @@ func (p *playerWindow) load(target string) {
 	p.win.Invalidate()
 }
 
-func (p *playerWindow) draw(c *ui.Context) {
+func (p *playerWindow) draw(c *ui.Context) { p.drawWithHeaders(c) }
+
+func (p *playerWindow) drawWithHeaders(c *ui.Context, headers ...func()) {
 	ui.Column(c).Fill().Background(c.Theme().Surface).Children(func() {
+		for _, header := range headers {
+			header()
+		}
 		if p.view != nil {
 			ui.WebView(c, p.view).Grow(1).FillWidth().MinHeight(0)
 		}

@@ -225,7 +225,7 @@ func readPlaybackCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), now
 func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 	n := p.native
 	if n == nil {
-		p.draw(c)
+		p.drawWithHeaders(c, func() { b.drawPlayerSharing(p, c) })
 		return
 	}
 	t := c.Theme()
@@ -245,6 +245,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					n.hideCommentPanel = !n.hideCommentPanel
 					n.follow.positioned = false
 				}
+				b.drawPlayerSharing(p, c)
 				if n.loadingStream {
 					label := "一時停止"
 					if n.pauseRequested {

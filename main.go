@@ -475,8 +475,16 @@ func (b *browser) toolbar(c *ui.Context) {
 			if ui.Button(c, "☆ 登録").Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
 				b.pinCurrent()
 			}
-			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
+			if ui.Button(c, "go-nico-list用URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
 				b.copyCurrent()
+			}
+			raw := b.current()
+			if !b.official && b.index >= 0 {
+				raw = b.navigation[b.index].target
+			}
+			target, label := ordinaryShareURL(raw)
+			if ui.Button(c, label).Disabled(target == "").Clicked() {
+				copyURL(c, target, func(message string) { b.status = message })
 			}
 			if ui.Button(c, "設定").Clicked() {
 				b.showPlaybackSettings = !b.showPlaybackSettings
