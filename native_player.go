@@ -42,6 +42,7 @@ type nativePlayer struct {
 	tags                  []string
 	tagNotice             string
 	videoID               string
+	handoffPosition       *webPlaybackPosition
 }
 
 const defaultNativeVolume = 80
@@ -155,6 +156,9 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 }
 
 func (n *nativePlayer) failStream(message string) {
+	if s := n.stream; s != nil && s.Ready() && !s.Preparing() {
+		n.handoffPosition = &webPlaybackPosition{seconds: s.Position().Seconds(), paused: !s.Playing()}
+	}
 	if n.relay != nil {
 		if reason := n.relay.lastFailure.Load(); reason != nil {
 			message += " 中継で記録した直近のエラーは「" + *reason + "」です。"

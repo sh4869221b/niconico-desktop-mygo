@@ -17,6 +17,9 @@ func (p *playerWindow) nativeWebRestore(requested screenRoute, now time.Time) *w
 		return nil
 	}
 	position := webPlaybackPosition{seconds: current.startTime().Seconds(), paused: n.pauseRequested}
+	if n.handoffPosition != nil {
+		position = *n.handoffPosition
+	}
 	if s := n.stream; s != nil {
 		position.paused = !s.Playing()
 		if s.Ready() && !s.Preparing() {
