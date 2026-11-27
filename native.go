@@ -399,6 +399,11 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 			if item.summary != "" {
 				ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(t.TextMuted).FontSize(12).Wrap().MaxLines(2)
 			}
+			if b.thumbnails != nil && !item.masked && b.thumbnails.failed(item.thumbnail) {
+				if ui.Button(scope, "画像を再試行").Clicked() {
+					b.thumbnails.retry(item.thumbnail)
+				}
+			}
 			if kind == screenSearch {
 				p := videoPublisher{item.ownerName, item.owner}
 				if p.videos != "" {
@@ -461,10 +466,18 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 		Background(t.Background).Border(1, t.Border).Cursor(ui.CursorPointer)
 	press := ui.Local(button, "thumbnail press", func() thumbnailPress { return thumbnailPress{} })
 	button.HandleInput(press.input).Children(func() {
+		var img *ui.Bitmap
 		if b.thumbnails != nil {
-			if img := b.thumbnails.image(item.thumbnail); img != nil {
-				ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
-			}
+			img = b.thumbnails.image(item.thumbnail)
+		}
+		if img != nil {
+			ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
+		} else {
+			symbol, note := thumbnailFallback(item, b.thumbnails)
+			ui.Column(scope).Fill().AlignItems(ui.Center).Justify(ui.Center).IgnoreInput(true).AccessHidden(true).Children(func() {
+				ui.Text(scope, symbol).FontSize(18)
+				ui.Text(scope, note).FontSize(10).TextColor(t.TextMuted)
+			})
 		}
 	})
 	if button.Clicked() && !press.canceled {

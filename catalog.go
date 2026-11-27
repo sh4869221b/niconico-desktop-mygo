@@ -227,6 +227,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	masked                                            bool
 }
 
 type catalogPage struct {
@@ -439,6 +440,7 @@ func (v apiVideo) thumbnailURL() string {
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
 	x.thumbnail = v.thumbnailURL()
+	x.masked = v.RequireSensitiveMasking
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
 	if len(x.tags) == 0 {
