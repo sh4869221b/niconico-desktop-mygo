@@ -34,6 +34,7 @@ type browser struct {
 	loginCheck                   uint64
 	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
+	loginHelp                    bool
 	officialTarget               string
 	catalog                      catalog
 	thumbnails                   *thumbnails
@@ -158,7 +159,10 @@ func (b *browser) attachOfficial() {
 		}
 		if allowedURL(e.URL) == nil {
 			e.PreventDefault()
-			b.status = "ニコニコ以外への移動をブロックしました。"
+			b.status = "ニコニコ以外への移動をブロックしました。外部事業者のログインは利用できません。"
+			if b.officialTarget == login {
+				b.loginHelp = true
+			}
 		} else if b.playOfficialLink(view, e.URL, false) {
 			e.PreventDefault()
 		} else {
@@ -183,7 +187,10 @@ func (b *browser) attachOfficial() {
 				}
 			})
 		} else {
-			b.status = "アプリ外の新規ウィンドウは開きません。"
+			b.status = "アプリ外の新規ウィンドウは開きません。ニコニコのログイン方法を選んでください。"
+			if b.officialTarget == login {
+				b.loginHelp = true
+			}
 			b.win.Invalidate()
 		}
 		return nil
@@ -385,13 +392,18 @@ func (b *browser) draw(c *ui.Context) {
 			if b.showLibrary {
 				b.sidebar(c)
 			}
-			if !b.official {
+			if b.loginHelp {
+				b.drawLoginHelp(c, false)
+			} else if !b.official {
 				b.drawNative(c)
 			} else if b.web != nil {
 				ui.WebView(c, b.web).Grow(1).MinWidth(0)
 			} else {
 				ui.Column(c).Grow(1).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 					ui.Text(c, b.status).Wrap()
+					if b.officialTarget == login {
+						b.drawLoginHelp(c, true)
+					}
 				})
 			}
 		})
@@ -537,5 +549,30 @@ func (b *browser) sidebar(c *ui.Context) {
 				}
 			})
 		})
+	})
+}
+
+func (b *browser) drawLoginHelp(c *ui.Context, retry bool) {
+	ui.Column(c).Grow(1).MinWidth(0).Padding(20).Gap(12).Children(func() {
+		ui.Text(c, "公式ログインを開く前に").FontSize(24).Bold()
+		ui.Text(c, "Windowsでは Microsoft Edge WebView2 Runtime が必要です。ニコニコの公式ログインを同じアプリ内で開きます。").Wrap()
+		ui.Text(c, "ニコニコのアカウントでログインしてください。外部事業者の認証先とアプリ外の別窓への移動には対応していません。").Wrap()
+		label := "公式ログインを開く"
+		if retry {
+			label = "ログイン画面を再試行"
+		}
+		if ui.PrimaryButton(c, label).Clicked() {
+			b.loginHelp = false
+			b.openOfficial(login)
+		}
+		if ui.Button(c, "検索へ戻る").Clicked() {
+			b.loginHelp = false
+			b.navigate(home)
+		}
+		if ui.Button(c, "WebView2 Runtime の公式案内（外部ブラウザー）").Clicked() {
+			if err := mygo.Shell.OpenExternal("https://developer.microsoft.com/microsoft-edge/webview2/"); err != nil {
+				b.status = "Runtimeの案内を開けませんでした。"
+			}
+		}
 	})
 }
