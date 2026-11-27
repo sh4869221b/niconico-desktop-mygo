@@ -293,7 +293,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					go mygo.RunOnMain(func() {
 						if !b.closed && b.player == p && p.native == n {
 							b.loadNativePlayer(p, routeFor(p.target))
-							p.native.startAt, p.native.pauseRequested = n.retryAt, n.retryPaused
+							p.native.startAt, p.native.retryAt, p.native.pauseRequested = n.retryAt, n.retryAt, n.retryPaused
 						}
 					})
 				}
@@ -366,9 +366,6 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				}
 			})
 		})
-		if status := nativeWaitStatus(s.Ready(), s.Preparing(), s.Buffering()); status != "" {
-			ui.Text(c, status).Role(ui.RoleStatus).Padding(4, 12)
-		}
 	})
 }
 
@@ -453,8 +450,8 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 						b.browseInMain(target)
 					}
 				}
-				if s := n.stream; !s.Ready() || s.Preparing() || s.Buffering() {
-					ui.Text(c, "配信を読み込んでいます…").Wrap()
+				if s := n.stream; nativeWaitStatus(s.Ready(), s.Preparing(), s.Buffering()) != "" {
+					ui.Text(c, nativeWaitStatus(s.Ready(), s.Preparing(), s.Buffering())).Role(ui.RoleStatus).Wrap()
 				}
 			})
 			if n.tagNotice != "" {
