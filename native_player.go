@@ -100,7 +100,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			} else if n.stream, err = video.OpenURL(local); err != nil {
 				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
-				n.stream.SetVolume(b.nativeVolume / 100)
+				b.applyNativeAudio(n.stream)
 				if n.stream.PrepareStart(n.startAt) {
 					n.startAt = 0
 				}
@@ -335,6 +335,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
 					b.nativeVolume = volume
 					s.SetVolume(volume / 100)
+					b.saveNativeAudio()
 				}
 				ui.Text(c, fmt.Sprintf("音量 %d%%", int(volume+0.5))).Width(68).TextAlign(ui.End)
 				mute := "ミュート"
@@ -343,9 +344,14 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				}
 				if ui.Button(c, mute).Clicked() {
 					s.SetMuted(!s.Muted())
+					b.nativeMuted = s.Muted()
+					b.saveNativeAudio()
 				}
 			})
 		})
+		if b.nativeAudioNotice != "" {
+			ui.Text(c, b.nativeAudioNotice).Role(ui.RoleStatus).Wrap()
+		}
 	})
 }
 

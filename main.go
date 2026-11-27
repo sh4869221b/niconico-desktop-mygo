@@ -51,6 +51,8 @@ type browser struct {
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
 	nativeVolume                 float64
+	nativeMuted                  bool
+	nativeAudioNotice            string
 
 	searchSortPath, searchSortNotice string
 	searchDefault                    searchSortPreference
@@ -75,6 +77,11 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		if audio, err := loadNativeAudio(b.nativeAudioPath()); err == nil {
+			b.nativeVolume, b.nativeMuted = audio.Volume, audio.Muted
+		} else {
+			b.nativeAudioNotice = "音量・ミュート設定を読み込めませんでした。"
+		}
 		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
 		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
