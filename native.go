@@ -196,10 +196,17 @@ func (b *browser) drawNative(c *ui.Context) {
 		return
 	}
 	r, p := b.navigation[b.index], b.result
+	message := b.resultStatus(r)
+	if message != b.announcedResult || b.epoch != b.announcedResultEpoch {
+		b.announcedResult, b.announcedResultEpoch = message, b.epoch
+		if message != "" {
+			c.Announce(message)
+		}
+	}
 	epoch := b.epoch
 	// Keep the controls in the same focus scope while changing sort or page.
 	scope := c.Key(r.kind).Key(r.key)
-	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
+	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Busy(b.busy).Label("結果領域").Children(func() {
 		if r.kind == screenHome {
 			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
 			ui.Row(scope).Gap(8).Wrap().Children(func() {
@@ -333,6 +340,22 @@ func (b *browser) drawNative(c *ui.Context) {
 			})
 		})
 	})
+}
+
+func (b *browser) resultStatus(r screenRoute) string {
+	if r.kind == screenHome {
+		return ""
+	}
+	if b.busy {
+		return "読み込み中…"
+	}
+	if b.resultErr != nil {
+		return b.resultErr.Error()
+	}
+	if r.kind == screenVideo {
+		return "動画情報を読み込みました。"
+	}
+	return fmt.Sprintf("このページに%d件の結果を読み込みました。", len(b.result.items))
 }
 
 func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {

@@ -51,6 +51,9 @@ type browser struct {
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
 	nativeVolume                 float64
+	announcedStatus              string
+	announcedResult              string
+	announcedResultEpoch         uint64
 
 	searchSortPath, searchSortNotice string
 	searchDefault                    searchSortPreference
@@ -375,6 +378,12 @@ func (b *browser) copyCurrent() {
 }
 
 func (b *browser) draw(c *ui.Context) {
+	if b.status != b.announcedStatus {
+		b.announcedStatus = b.status
+		if b.status != "" {
+			c.Announce(b.status)
+		}
+	}
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
