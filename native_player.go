@@ -27,8 +27,10 @@ type nativePlayer struct {
 	startAt               time.Duration
 	showComments          bool
 	recorded              bool
-	panel                 nativePlayerPanel
+	hideCommentPanel      bool
+	showOverview          bool
 	description           []descriptionPart
+	publisher             videoPublisher
 	allComments           []timedComment
 	allCues               []danmakuCue
 	commentRows           []int
@@ -49,14 +51,6 @@ type nativeCommentData struct {
 	cues   []danmakuCue
 	notice string
 }
-
-type nativePlayerPanel uint8
-
-const (
-	commentPanel nativePlayerPanel = iota
-	overviewPanel
-	noPlayerPanel
-)
 
 func (p *playerWindow) stopNative() {
 	if n := p.native; n != nil {
@@ -123,10 +117,11 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			return
 		}
 		go func() {
-			tags, err := playbackTags(ctx, b.catalog, route, source.watch)
+			tags, publisher, err := playbackDetails(ctx, b.catalog, route, source.watch)
 			mygo.RunOnMain(func() {
 				if active() && ctx.Err() == nil {
 					n.tags, n.tagNotice = tags, "タグはありません。"
+					n.publisher = publisher
 					if err != nil {
 						n.tagNotice = "タグを取得できませんでした。"
 					}
@@ -234,31 +229,32 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		return
 	}
 	t := c.Theme()
+	w, h := c.Size()
 	b.applyPendingCommentNG(n)
 	ui.Column(c).Fill().Background(t.Surface).Children(func() {
-		ui.Row(c).Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "独自プレーヤー（試験版）").Bold()
-			if ui.Button(c, "公式 WebView で開く").Clicked() {
-				b.openPlayerMode(p.target, webPlayback)
-			}
-			if n.stream != nil && ui.Button(c, "コメント切替").Label("コメント表示切替").Clicked() {
-				n.showComments = !n.showComments
-			}
-			if n.stream != nil && ui.Button(c, "コメント一覧").Checked(n.panel == commentPanel).Clicked() {
-				n.togglePanel(commentPanel)
-			}
-			if n.stream != nil && ui.Button(c, "概要欄").Checked(n.panel == overviewPanel).Clicked() {
-				n.togglePanel(overviewPanel)
-			}
-			if n.loadingStream {
-				label := "一時停止"
-				if n.pauseRequested {
-					label = "再生"
+		ui.Scroll(c.Key("player-toolbar")).FillWidth().MaxHeight(h * 0.15).Shrink(0).Children(func() {
+			ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+				ui.Text(c, "独自プレーヤー（試験版）").Bold()
+				if ui.Button(c, "公式 WebView で開く").Clicked() {
+					b.openPlayerMode(p.target, webPlayback)
 				}
-				if ui.Button(c, label).Clicked() {
-					n.pauseRequested = !n.pauseRequested
+				if n.stream != nil && ui.Button(c, "コメント切替").Label("コメント表示切替").Clicked() {
+					n.showComments = !n.showComments
 				}
-			}
+				if n.stream != nil && ui.Button(c, "コメント一覧").Checked(!n.hideCommentPanel).Clicked() {
+					n.hideCommentPanel = !n.hideCommentPanel
+					n.follow.positioned = false
+				}
+				if n.loadingStream {
+					label := "一時停止"
+					if n.pauseRequested {
+						label = "再生"
+					}
+					if ui.Button(c, label).Clicked() {
+						n.pauseRequested = !n.pauseRequested
+					}
+				}
+			})
 		})
 		s := n.stream
 		if s != nil {
@@ -297,16 +293,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 		}
 		current := s.Position()
-		w, h := c.Size()
 		compact := w < 780
-		if n.tagNotice != "" {
-			ui.Row(c).FillWidth().Padding(2, 12).Gap(8).AlignItems(ui.Start).Children(func() {
-				ui.Text(c, "タグ").Bold().Padding(5, 0)
-				ui.Scroll(c).Grow(1).MinWidth(0).MaxHeight(76).Children(func() {
-					b.drawVideoTags(c, n.tags, n.tagNotice)
-				})
-			})
-		}
 		var body ui.Element
 		if compact {
 			body = ui.Column(c)
@@ -314,67 +301,52 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			body = ui.Row(c)
 		}
 		body.FillWidth().Grow(1).MinHeight(0).Gap(8).Padding(0, 8).AlignItems(ui.Stretch).Children(func() {
-			drawNativeVideo(c, n, current)
-			if n.panel == noPlayerPanel {
+			ui.Column(c).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+				b.drawNativeVideoInfo(c, n, h)
+				drawNativeVideo(c, n, current)
+			})
+			if n.hideCommentPanel {
 				return
 			}
 			panel := ui.Column(c).Padding(6, 8).Gap(5).Border(1, t.Border).Radius(6).Background(t.Background)
 			if compact {
-				panel.Height(min(144, h*0.32)).FillWidth()
+				panel.Height(min(144, h*0.21)).Shrink(0).FillWidth()
 			} else {
 				panel.Width(max(246, min(340, w*0.30))).FillHeight()
 			}
-			panel.Children(func() {
-				if n.panel == overviewPanel {
-					b.drawNativeOverview(c, n)
-				} else {
-					b.drawNativeComments(c, n, current)
+			panel.Children(func() { b.drawNativeComments(c, n, current) })
+		})
+		ui.Scroll(c.Key("player-controls")).FillWidth().MaxHeight(h * 0.15).Shrink(0).Children(func() {
+			ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+				label := "再生"
+				if s.Playing() {
+					label = "一時停止"
+				}
+				if ui.Button(c, label).Clicked() {
+					toggleNativePlayback(s)
+				}
+				seconds := current.Seconds()
+				if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Disabled(s.Preparing()).Changed() {
+					s.Seek(time.Duration(seconds * float64(time.Second)))
+					n.follow.positioned = false
+				}
+				ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackTime(duration))
+				volume := s.Volume() * 100
+				if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
+					b.nativeVolume = volume
+					s.SetVolume(volume / 100)
+				}
+				ui.Text(c, fmt.Sprintf("音量 %d%%", int(volume+0.5))).Width(68).TextAlign(ui.End)
+				mute := "ミュート"
+				if s.Muted() {
+					mute = "ミュート解除"
+				}
+				if ui.Button(c, mute).Clicked() {
+					s.SetMuted(!s.Muted())
 				}
 			})
 		})
-		ui.Row(c).Padding(8, 12).Gap(8).AlignItems(ui.Center).Children(func() {
-			label := "再生"
-			if s.Playing() {
-				label = "一時停止"
-			}
-			if ui.Button(c, label).Clicked() {
-				toggleNativePlayback(s)
-			}
-			seconds := current.Seconds()
-			if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Disabled(s.Preparing()).Changed() {
-				s.Seek(time.Duration(seconds * float64(time.Second)))
-				n.follow.positioned = false
-			}
-			ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackTime(duration))
-			volume := s.Volume() * 100
-			if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
-				b.nativeVolume = volume
-				s.SetVolume(volume / 100)
-			}
-			ui.Text(c, fmt.Sprintf("音量 %d%%", int(volume+0.5))).Width(68).TextAlign(ui.End)
-			mute := "ミュート"
-			if s.Muted() {
-				mute = "ミュート解除"
-			}
-			if ui.Button(c, mute).Clicked() {
-				s.SetMuted(!s.Muted())
-			}
-		})
-		if !s.Ready() || s.Preparing() || s.Buffering() {
-			ui.Text(c, "配信を読み込んでいます…").Padding(4, 12)
-		}
 	})
-}
-
-func (n *nativePlayer) togglePanel(panel nativePlayerPanel) {
-	if n.panel == panel {
-		n.panel = noPlayerPanel
-	} else {
-		n.panel = panel
-		if panel == commentPanel {
-			n.follow.positioned = false
-		}
-	}
 }
 
 func toggleNativePlayback(s *ui.VideoPlayer) {
@@ -414,15 +386,47 @@ func drawNativeVideo(c *ui.Context, n *nativePlayer, current time.Duration) {
 	})
 }
 
-func (b *browser) drawNativeOverview(c *ui.Context, n *nativePlayer) {
-	ui.Text(c, "概要欄").Bold()
-	if len(n.description) == 0 {
-		ui.Text(c, "概要はありません。").Wrap()
-		return
-	}
-	ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
-		b.drawDescription(c, n.description)
+func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height float32) {
+	// Cap each band against the window height even when controls wrap at large
+	// text sizes. The video gets the remaining space.
+	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, height*0.17)).Shrink(0).Children(func() {
+		ui.Column(c).FillWidth().Gap(4).Padding(3, 0).Children(func() {
+			ui.Row(c).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
+				label := "概要欄を表示"
+				if n.showOverview {
+					label = "概要欄を非表示"
+				}
+				if ui.Button(c.Key("overview-toggle"), label).Checked(n.showOverview).Clicked() {
+					n.showOverview = !n.showOverview
+				}
+				if p := n.publisher; p != (videoPublisher{}) {
+					if p.name != "" {
+						ui.Text(c, p.name).SingleLine().Ellipsis("…").MaxWidth(220).MinWidth(0).Focusable().Tooltip(p.name)
+					}
+					if p.videos != "" && ui.Button(c, "投稿動画").Label(p.linkLabel()).Clicked() {
+						b.browseInMain(p.videos)
+					}
+				}
+				if s := n.stream; !s.Ready() || s.Preparing() || s.Buffering() {
+					ui.Text(c, "配信を読み込んでいます…").Wrap()
+				}
+			})
+			if n.tagNotice != "" {
+				b.drawVideoTags(c, n.tags, n.tagNotice)
+			}
+		})
 	})
+	if n.showOverview {
+		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, height*0.18)).Shrink(0).Focusable().Label("概要欄").Children(func() {
+			ui.Column(c).FillWidth().Padding(6, 8).Background(c.Theme().Background).Children(func() {
+				if len(n.description) == 0 {
+					ui.Text(c, "概要はありません。").Wrap()
+				} else {
+					b.drawDescription(c, n.description)
+				}
+			})
+		})
+	}
 }
 
 func formatPlaybackTime(d time.Duration) string {

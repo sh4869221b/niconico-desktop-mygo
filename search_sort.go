@@ -1,6 +1,11 @@
 package main
 
-import "net/url"
+import (
+	"encoding/json"
+	"io"
+	"net/url"
+	"os"
+)
 
 const searchPageSize = 32
 const snapshotResultLimit = 100000
@@ -65,4 +70,56 @@ func (r screenRoute) withSearchSort(sort searchOrdering, ascending bool) screenR
 	}
 	u.RawQuery = q.Encode()
 	return routeFor(u.String())
+}
+
+type searchSortPreference struct {
+	Sort      string `json:"sort"`
+	Ascending bool   `json:"ascending"`
+}
+
+func loadSearchSort(path string) searchSortPreference {
+	f, err := os.Open(path)
+	if err != nil {
+		return searchSortPreference{}
+	}
+	defer f.Close()
+	const limit = 4096
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	var pref searchSortPreference
+	if err != nil || len(data) > limit || json.Unmarshal(data, &pref) != nil {
+		return searchSortPreference{}
+	}
+	sort, ok := findSearchSort(pref.Sort)
+	if !ok {
+		return searchSortPreference{}
+	}
+	return searchSortPreference{Sort: sort.urlKey, Ascending: sort.snapshotKey != "" && pref.Ascending}
+}
+
+func (p searchSortPreference) apply(r screenRoute) screenRoute {
+	if r.kind != screenSearch || p == (searchSortPreference{}) {
+		return r
+	}
+	u, _ := url.Parse(r.target)
+	if q := u.Query(); q.Has("sort") || q.Has("order") {
+		return r
+	}
+	sort, _ := findSearchSort(p.Sort)
+	return r.withSearchSort(sort, p.Ascending).withPage(r.page)
+}
+
+func (b *browser) rememberSearchSort(sort searchOrdering, ascending bool) {
+	pref := searchSortPreference{Sort: sort.urlKey, Ascending: sort.snapshotKey != "" && ascending}
+	if pref == b.searchDefault {
+		return
+	}
+	data, err := json.Marshal(pref)
+	if err == nil && b.searchSortPath != "" {
+		err = writeSettings(b.searchSortPath, data)
+	}
+	b.searchSortNotice = ""
+	if err != nil || b.searchSortPath == "" {
+		b.searchSortNotice = "並べ替えを保存できませんでした。"
+	}
+	b.searchDefault = pref
 }

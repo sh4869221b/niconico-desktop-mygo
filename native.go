@@ -46,7 +46,7 @@ func (b *browser) navigate(link string) {
 		b.openOfficial(link)
 		return
 	}
-	b.openNative(r, true)
+	b.openNative(b.searchDefault.apply(r), true)
 }
 
 func (b *browser) openNative(r screenRoute, add bool) {
@@ -253,7 +253,10 @@ func (b *browser) drawNative(c *ui.Context) {
 			}
 		})
 		if r.page > 0 || p.more || r.kind == screenSearch {
-			ui.Row(scope).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+				if ui.Button(scope, "最初のページ").Disabled(r.page == 0).Clicked() {
+					b.openNative(r.withPage(0), true)
+				}
 				if ui.Button(scope, "前へ").Disabled(b.busy || r.page == 0).Clicked() {
 					b.pageNative(-1)
 				}
@@ -334,10 +337,14 @@ func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
 	if changed {
 		for _, sort := range searchSorts {
 			if sort.label == choice {
+				b.rememberSearchSort(sort, order == "昇順")
 				b.openNative(r.withSearchSort(sort, order == "昇順"), true)
 				break
 			}
 		}
+	}
+	if b.searchSortNotice != "" {
+		ui.Text(scope, b.searchSortNotice).Wrap()
 	}
 }
 
@@ -379,8 +386,23 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 			if item.summary != "" {
 				ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(t.TextMuted).FontSize(12).Wrap().MaxLines(2)
 			}
+			if kind == screenSearch {
+				p := videoPublisher{item.ownerName, item.owner}
+				if p.videos != "" {
+					name := p.name
+					if name == "" {
+						name = "投稿者"
+					}
+					if metadataButton(scope.Key("publisher"), name, p.linkLabel(), 240).Clicked() {
+						b.browseInMain(p.videos)
+					}
+				} else if p.name != "" {
+					ui.Text(scope, p.name).SingleLine().Ellipsis("…").MaxWidth(240).MinWidth(0).Focusable().Tooltip(p.name)
+				}
+				b.drawVideoTags(scope, item.tags, "タグ情報なし")
+			}
 		})
-		if item.owner != "" && kind != screenUser && ui.Button(scope, "投稿者").Clicked() {
+		if item.owner != "" && kind != screenSearch && kind != screenUser && ui.Button(scope, "投稿者").Clicked() {
 			b.navigate(item.owner)
 		}
 	})
