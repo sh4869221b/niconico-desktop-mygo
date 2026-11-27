@@ -1,6 +1,6 @@
 # Compare both renderers on the same live native-player scenes, including
 # the identical DirectWrite atlas texels, UI frames and in-memory video.
-param([string]$Revision = "HEAD")
+param([string]$Revision = "HEAD", [switch]$DenseOnly)
 $ErrorActionPreference = "Stop"
 $here = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $base = "443592d9e4df5b52859aef11cbce30f3593c2787"
@@ -32,12 +32,13 @@ try {
     Copy-Item (Join-Path $PSScriptRoot "frames_windows_test.go") (Join-Path $actual "z_compare_danmaku_windows_test.go")
     Push-Location $actual
     try {
+        $env:DANMAKU_CHECK_DENSE_ONLY = [int]$DenseOnly.IsPresent
         $out = & go test -mod=readonly -count=1 -run '^TestCompareD3D11Danmaku$' -v .
         $rc = $LASTEXITCODE
         $out | Write-Output
         if ($rc) { throw "D3D11 comparison for $Revision failed" }
         if (@($out | Where-Object { $_ -match ': FRAME ' }).Count -ne 54) { throw "Expected 54 readbacks" }
-        $summary = "54 same-scene D3D11 images and instance counts match $base ($Revision)."
+        $summary = "54 same-scene D3D11 images and instance counts, a translucent composite and 14 damage updates match $base ($Revision)."
         Write-Output $summary
         if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary }
     } finally { Pop-Location }

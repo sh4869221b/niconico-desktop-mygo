@@ -181,12 +181,7 @@ ClassPS classps(ClassOut i) {
 		[branch] if (i.params.z > 0.5) {
 			c = paint(p, i.params.z, float4(0, 0, 0, 0), i.color, i.color2, i.grad);
 		}
-		float coverage = maskTex.SampleLevel(samp, i.pt.zw, 0).r;
-#if CLASSES == 16
-		// Zero coverage leaves every destination channel intact.
-		if (coverage == 0) discard;
-#endif
-		res = c * textCoverage(coverage, unpremul(c), i.inner.x, i.inner.y, i.radii);
+		res = c * textCoverage(maskTex.SampleLevel(samp, i.pt.zw, 0).r, unpremul(c), i.inner.x, i.inner.y, i.radii);
 	}
 #endif
 #if IMAGE
@@ -221,11 +216,7 @@ ClassPS classps(ClassOut i) {
 			c = paint(p, i.params.z, float4(0, 0, 0, 0), i.color, i.color2, i.grad);
 		}
 		float3 straight = unpremul(c);
-		float3 coverage = colorTex.SampleLevel(samp, i.pt.zw, 0).rgb;
-#if CLASSES == 32
-		if (!any(coverage)) discard;
-#endif
-		float3 a = subpixelCoverage(coverage, straight, i.inner.x, i.inner.y, i.radii);
+		float3 a = subpixelCoverage(colorTex.SampleLevel(samp, i.pt.zw, 0).rgb, straight, i.inner.x, i.inner.y, i.radii);
 		float3 w = a * c.a * classClip(i, mode) * i.params.w;
 		float wa = (w.r + w.g + w.b) / 3;
 		o.color = float4(straight * w, wa);

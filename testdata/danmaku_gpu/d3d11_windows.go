@@ -94,3 +94,40 @@ func DanmakuOverlapScene() *scene.Scene {
 
 	return s
 }
+
+// DanmakuHistory reuses a single back buffer, so drawFrame can exercise its
+// damage and no-change paths. No DXGI or desktop presentation is required.
+type DanmakuHistory struct {
+	renderer *Renderer
+	hwnd     uintptr
+}
+
+func (h *DanmakuHistory) Draw(s *scene.Scene) ([]byte, int, error) {
+	if h.renderer == nil {
+		hwnd, err := newHiddenWindow(s.Width, s.Height)
+		if err != nil {
+			return nil, 0, err
+		}
+		h.hwnd = hwnd
+		h.renderer, err = New(hwnd)
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	r := h.renderer
+	if _, err := r.drawFrame(s); err != nil {
+		return nil, 0, err
+	}
+	r.held = r.ctx1 != 0
+	pixels, _, err := r.read()
+	return pixels, int(r.redrew), err
+}
+
+func (h *DanmakuHistory) Close() {
+	if h.renderer != nil {
+		h.renderer.Release()
+	}
+	if h.hwnd != 0 {
+		destroyWindow(h.hwnd)
+	}
+}

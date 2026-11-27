@@ -32,7 +32,7 @@ jobs:
       - name: Compare native player D3D11 pixels
         if: always() && !cancelled() && github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
         shell: pwsh
-        run: ./testdata/danmaku_gpu/compare.ps1
+        run: ./testdata/danmaku_gpu/compare.ps1 -DenseOnly
       - name: Vet
         run: go vet -mod=readonly ./...
       - name: Build and package

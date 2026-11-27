@@ -1207,9 +1207,15 @@ func (r *Renderer) drawScene(s *scene.Scene, b *gpu.Builder, rtv uintptr) error 
 	return r.drawBuilt(built, b, rtv, nil)
 }
 
+// Dense outlined text alternates mask and ClearType runs. Joining large runs
+// trades more pixels shaded by the general shader for fewer draw submissions.
+// Keep the original policy for sparse text, where the general shader costs more.
+const joinOutlinedRuns = 384
+
 // buildScene builds the instances of s with b, with the textures they
 // read, for the render target r.drawing, and returns the scene built.
 func (r *Renderer) buildScene(s *scene.Scene, b *gpu.Builder) (*scene.Scene, error) {
+	b.JoinGlyphs = s.OutlinedRuns >= joinOutlinedRuns
 	b.BlurredImage, b.Chroma = r.blurImage, r.chromaView
 	s = b.Build(s, r.imageView)
 	b.BlurredImage, b.Chroma = nil, nil

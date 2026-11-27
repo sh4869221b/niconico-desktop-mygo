@@ -22,3 +22,20 @@ func danmakuRead(s *scene.Scene, baseline bool) ([]byte, [6]int, error) {
 	}
 	return d3d11.DanmakuReadback(s)
 }
+
+type DanmakuHistory struct {
+	candidate d3d11.DanmakuHistory
+	reference reference.DanmakuHistory
+}
+
+func (h *DanmakuHistory) Draw(r *Recorder, baseline bool) ([]byte, int, error) {
+	if baseline {
+		return h.reference.Draw(r.h.last)
+	}
+	return h.candidate.Draw(r.h.last)
+}
+
+func (h *DanmakuHistory) Close() {
+	h.candidate.Close()
+	h.reference.Close()
+}

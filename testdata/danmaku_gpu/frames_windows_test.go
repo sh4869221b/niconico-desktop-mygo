@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"os"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +29,18 @@ func compareDanmakuFrame(t *testing.T, read func(bool) ([]byte, [6]int, error), 
 		t.Errorf("%s: instance count %d, reference %d", name, work[0], oldWork[0])
 	}
 	if measure {
+		if os.Getenv("DANMAKU_CHECK_DENSE_ONLY") == "1" {
+			switch strings.Fields(name)[0] {
+			case "Sparse", "Normal":
+				if oldWork[1] != work[1] {
+					t.Errorf("%s: sparse/normal batching changed %d to %d", name, oldWork[1], work[1])
+				}
+			case "Dense":
+				if work[1] >= oldWork[1] {
+					t.Errorf("%s: dense batching did not reduce submissions %d to %d", name, oldWork[1], work[1])
+				}
+			}
+		}
 		for _, pair := range []struct {
 			label string
 			w     [6]int
@@ -59,6 +74,9 @@ func compareDanmakuFrame(t *testing.T, read func(bool) ([]byte, [6]int, error), 
 }
 
 func TestCompareD3D11Danmaku(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	testDanmakuDamage(t)
 	compareDanmakuFrame(t, ui.DanmakuOverlapReader(), "Overlapping translucent glyphs", true)
 	for _, density := range danmakuDensities {
 		n, draw := densityPlayer(t, density.interval)
@@ -94,5 +112,50 @@ func TestCompareD3D11Danmaku(t *testing.T) {
 		frame := rec.Frame(time.Duration(i) * time.Second / 60)
 		pixels := compareDanmakuFrame(t, rec.DanmakuTestBGRA, fmt.Sprintf("Unique %d", at), false)
 		t.Logf("FRAME Unique %d %d %d %s %x", ms, len(d.active), len(frame.Glyphs), fmt.Sprint(box), sha256.Sum256(pixels))
+	}
+}
+
+// Cross sparse/dense transitions, pause, backward seeks and a resize with
+// both renderers retaining prior pixels. Also compare against a fresh target.
+func testDanmakuDamage(t *testing.T) {
+	n, draw := densityPlayer(t, 8)
+	n.stream.Pause()
+	var history ui.DanmakuHistory
+	defer history.Close()
+	index := 0
+	for _, window := range []struct {
+		w, h  int
+		scale float32
+		times []int64
+	}{
+		{980, 680, 1, []int64{0, 1500, 2950, 3200, 3750, 5000, 5000, 5017, 701}},
+		{740, 524, 1.25, []int64{701, 3900, 5100, 5100, 26000}},
+	} {
+		rec := ui.NewRecorder(draw, ui.RecorderOptions{Width: window.w, Height: window.h, Scale: window.scale})
+		for _, ms := range window.times {
+			n.stream.Seek(time.Duration(ms) * time.Millisecond)
+			rec.Frame(time.Duration(index) * time.Second / 60)
+			index++
+			want, refMode, err := history.Draw(rec, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, candMode, err := history.Draw(rec, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			full, _, err := rec.DanmakuTestBGRA(true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(want, got) {
+				t.Errorf("retained frame %d at %dms differs (redraw mode %d/%d)", index, ms, refMode, candMode)
+			}
+			if !bytes.Equal(want, full) {
+				t.Errorf("reference retained frame %d at %dms differs from full redraw", index, ms)
+			}
+			t.Logf("DAMAGE %dms %d active=%d reference=%d candidate=%d", ms, window.w, len(n.danmaku.active), refMode, candMode)
+		}
+		rec.Close()
 	}
 }
