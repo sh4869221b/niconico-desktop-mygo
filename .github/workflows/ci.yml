@@ -33,16 +33,6 @@ jobs:
         if: always() && !cancelled() && github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
         shell: pwsh
         run: ./testdata/danmaku_gpu/compare.ps1
-      - name: Recheck original joining experiment
-        if: always() && !cancelled() && github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
-        continue-on-error: true
-        shell: pwsh
-        run: ./testdata/danmaku_gpu/compare.ps1 -Revision 47d71eb7fa93d306747f01db2a31d915fde02c09
-      - name: Recheck original trimming experiment
-        if: always() && !cancelled() && github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
-        continue-on-error: true
-        shell: pwsh
-        run: ./testdata/danmaku_gpu/compare.ps1 -Revision b70602f0005b24d4a179fba696170a7a7bb1d8cb
       - name: Vet
         run: go vet -mod=readonly ./...
       - name: Build and package

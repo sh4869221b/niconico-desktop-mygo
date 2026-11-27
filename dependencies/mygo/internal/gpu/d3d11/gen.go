@@ -30,8 +30,6 @@ var classSets = []uint32{
 	set(gpu.ClassPlain, gpu.ClassGlyph),
 	set(gpu.ClassPlain, gpu.ClassSubpixel),
 	set(gpu.ClassFill),
-	set(gpu.ClassGlyph, gpu.ClassSubpixel),
-	set(gpu.ClassGlyph, gpu.ClassSubpixel, gpu.ClassImage),
 	set(gpu.ClassPlain, gpu.ClassFill, gpu.ClassShadow, gpu.ClassGlyph, gpu.ClassSubpixel, gpu.ClassImage),
 }
 
