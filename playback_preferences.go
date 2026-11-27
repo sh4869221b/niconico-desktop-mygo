@@ -79,6 +79,10 @@ func writeSettings(path string, data []byte) error {
 }
 
 func (b *browser) changePlayback(m playbackMode) {
+	if b.playbackBlocked {
+		b.playbackNotice = "読めない再生設定は上書きしません。保存先と復旧を確認してください。"
+		return
+	}
 	if b.playMode == m {
 		return
 	}
@@ -111,5 +115,6 @@ func (b *browser) drawPlaybackSettings(c *ui.Context) {
 			}
 		})
 		ui.Text(c, "どちらも別ウィンドウで開きます。独自プレーヤーで再生できない場合は公式プレーヤーで開けます。").Wrap()
+		b.drawStorageSettings(c)
 	})
 }

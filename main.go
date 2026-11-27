@@ -21,36 +21,39 @@ const appName = "Niconico Desktop MyGo"
 var version = "dev"
 
 type browser struct {
-	win                          *mygo.Window
-	web                          *mygo.WebView
-	field, source, title, status string
-	libraryPath, storeWarning    string
-	commentLanguageWarning       bool
-	data                         library
-	history, loaded, closed      bool
-	showLibrary                  bool
-	session                      *mygo.Session
-	loginState                   loginState
-	loginCheck                   uint64
-	loginCancel, stopLoginWatch  context.CancelFunc
-	official, openingOfficial    bool
-	officialTarget               string
-	catalog                      catalog
-	thumbnails                   *thumbnails
-	navigation                   []screenRoute
-	index                        int
-	result                       catalogPage
-	resultErr                    error
-	busy                         bool
-	cancel                       context.CancelFunc
-	epoch                        uint64
-	player                       *playerWindow
-	playbackRequest              uint64
-	playMode                     playbackMode
-	showPlaybackSettings         bool
-	playbackPath, playbackNotice string
-	commentNG                    commentNG
-	nativeVolume                 float64
+	win                                       *mygo.Window
+	web                                       *mygo.WebView
+	field, source, title, status              string
+	libraryPath, storeWarning                 string
+	commentLanguageWarning                    bool
+	data                                      library
+	history, loaded, closed                   bool
+	showLibrary                               bool
+	storageOpen, storageBusy, playbackBlocked bool
+	storageFiles                              []profileFile
+	storageNotice, ngReadWarning              string
+	session                                   *mygo.Session
+	loginState                                loginState
+	loginCheck                                uint64
+	loginCancel, stopLoginWatch               context.CancelFunc
+	official, openingOfficial                 bool
+	officialTarget                            string
+	catalog                                   catalog
+	thumbnails                                *thumbnails
+	navigation                                []screenRoute
+	index                                     int
+	result                                    catalogPage
+	resultErr                                 error
+	busy                                      bool
+	cancel                                    context.CancelFunc
+	epoch                                     uint64
+	player                                    *playerWindow
+	playbackRequest                           uint64
+	playMode                                  playbackMode
+	showPlaybackSettings                      bool
+	playbackPath, playbackNotice              string
+	commentNG                                 commentNG
+	nativeVolume                              float64
 
 	searchSortPath, searchSortNotice string
 	searchDefault                    searchSortPreference
@@ -81,12 +84,17 @@ func (b *browser) start(initial string) {
 			b.playMode = mode
 		} else {
 			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
+			b.playbackBlocked = true
 		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
-		b.commentNG, _ = loadCommentNG(filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json"))
+		ngPath := filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json")
+		b.commentNG, err = loadCommentNG(ngPath)
+		if err != nil {
+			b.ngReadWarning = "NG設定を読み込めません。元ファイルを保護しています: " + ngPath
+		}
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
-			b.storeWarning = "既存の保存ファイルを読み込めません。上書きは行いません。"
+			b.storeWarning = "保存ファイルを読み込めません。上書きは行いません: " + b.libraryPath
 		}
 	} else {
 		b.storeWarning = "保存先を取得できません。"
@@ -379,7 +387,8 @@ func (b *browser) draw(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
 		if b.showPlaybackSettings {
-			b.drawPlaybackSettings(c)
+			_, height := c.Size()
+			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
@@ -395,13 +404,16 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		if b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+		if b.ngReadWarning != "" || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
 			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
 				if b.status != "" {
 					ui.Text(c, b.status).TextColor(t.TextMuted).Wrap()
 				}
 				if b.official && b.commentLanguageWarning {
 					ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted).Wrap()
+				}
+				if b.ngReadWarning != "" {
+					ui.Text(c, b.ngReadWarning).TextColor(t.TextMuted).Wrap()
 				}
 				if b.storeWarning != "" {
 					ui.Text(c, b.storeWarning).TextColor(t.TextMuted).Wrap()
