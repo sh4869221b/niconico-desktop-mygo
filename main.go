@@ -29,6 +29,12 @@ type browser struct {
 	data                         library
 	history, loaded, closed      bool
 	showLibrary                  bool
+	historySettingsPath          string
+	historySettingsErr           error
+	historyDisabled              bool
+	historyPeriod                string
+	historyErasePending          []entry
+	historyNotice                string
 	session                      *mygo.Session
 	loginState                   loginState
 	loginCheck                   uint64
@@ -75,6 +81,8 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.historySettingsPath = filepath.Join(dir, "NiconicoDesktopMyGo", "history.json")
+		b.historyDisabled, b.historySettingsErr = loadHistoryRecording(b.historySettingsPath)
 		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
 		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
@@ -305,7 +313,7 @@ func (b *browser) persist() bool {
 
 func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	e, ok := makeEntry(raw, title)
-	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
+	if b.historyDisabled || b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
 		return
 	}
 	if e.Title == e.URL {
@@ -316,6 +324,7 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if len(b.data.History) > 0 && b.data.History[0] == e {
 		return
 	}
+	e.LastViewedAt = time.Now().UTC()
 	b.data.History = putFirst(b.data.History, e, 100)
 	b.persist()
 	b.win.Invalidate()
@@ -379,7 +388,8 @@ func (b *browser) draw(c *ui.Context) {
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
 		if b.showPlaybackSettings {
-			b.drawPlaybackSettings(c)
+			_, height := c.Size()
+			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
