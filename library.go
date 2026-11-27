@@ -8,15 +8,21 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 	"unicode"
 )
 
 const maxLibraryBytes = 2_000_000
 
 type entry struct {
-	URL   string
-	Title string
-	Kind  string
+	URL             string
+	Title           string
+	Kind            string
+	LastViewedAt    time.Time `json:",omitzero"`
+	PositionKnown   bool      `json:",omitempty"`
+	PositionSeconds float64   `json:",omitempty"`
+	DurationSeconds float64   `json:",omitempty"`
+	Completed       bool      `json:",omitempty"`
 }
 type library struct {
 	Pins    []entry
@@ -54,7 +60,11 @@ func normalize(xs []entry, limit int, videosOnly bool) []entry {
 	seen := make(map[string]bool)
 	out := make([]entry, 0, min(len(xs), limit))
 	for _, e := range xs {
+		original := e
 		e, ok := makeEntry(e.URL, e.Title)
+		if videosOnly {
+			e = copyHistoryProgress(e, original)
+		}
 		if !ok || seen[e.URL] || videosOnly && e.Kind != "動画" {
 			continue
 		}

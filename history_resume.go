@@ -1,0 +1,118 @@
+package main
+
+import (
+	"github.com/egoist/mygo/ui"
+	"math"
+	"net/url"
+	"slices"
+	"time"
+)
+
+const historyProgressInterval = 15 * time.Second
+
+func validHistorySeconds(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value < 1<<33
+}
+func copyHistoryProgress(e, old entry) entry {
+	e.LastViewedAt = old.LastViewedAt
+	if old.PositionKnown && validHistorySeconds(old.PositionSeconds) && validHistorySeconds(old.DurationSeconds) {
+		e.PositionKnown = true
+		e.PositionSeconds = old.PositionSeconds
+		e.DurationSeconds = old.DurationSeconds
+		e.Completed = old.Completed
+	}
+	return e
+}
+func historyPlaybackURL(e entry, resume bool) string {
+	r := routeFor(e.URL)
+	if r.kind != screenVideo {
+		return ""
+	}
+	if !resume {
+		return playbackRestoreURL(r.link, 0)
+	}
+	u, _ := url.Parse(r.target)
+	if u.Query().Has("from") {
+		return r.target
+	}
+	if e.PositionKnown && !e.Completed && e.PositionSeconds > 0 && validHistorySeconds(e.PositionSeconds) {
+		return playbackRestoreURL(r.link, e.PositionSeconds)
+	}
+	return r.link
+}
+func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force bool) {
+	if b.player != p || b.storeWarning != "" {
+		return
+	}
+	raw, seconds, duration, completed := "", float64(0), float64(0), false
+	if n := p.native; n != nil {
+		if n.stream == nil || !n.stream.Ready() || n.stream.Preparing() || n.stream.Err() != nil {
+			return
+		}
+		raw = p.target
+		seconds = n.stream.Position().Seconds()
+		duration = n.stream.Duration().Seconds()
+		completed = n.stream.Ended()
+	} else {
+		if p.restoring != nil || p.playedPosition == nil || p.playedVideo == "" {
+			return
+		}
+		raw = p.playedWatch.link
+		seconds = p.playedPosition.seconds
+		duration = p.playedPosition.duration
+		completed = p.playedPosition.ended
+	}
+	key, kind := canonical(raw)
+	if kind != "動画" || p.historySuppressed[key] || !validHistorySeconds(seconds) || !validHistorySeconds(duration) {
+		return
+	}
+	i := slices.IndexFunc(b.data.History, func(e entry) bool { return e.URL == key })
+	if i < 0 {
+		return
+	} // A deleted row must never be re-created by a position sample.
+	if !force && p.lastHistoryVideo == key && !p.lastHistoryWrite.IsZero() && now.Sub(p.lastHistoryWrite) < historyProgressInterval {
+		return
+	}
+	p.lastHistoryWrite, p.lastHistoryVideo = now, key
+	e := &b.data.History[i]
+	e.PositionKnown, e.PositionSeconds, e.DurationSeconds, e.Completed = true, seconds, duration, completed
+	e.LastViewedAt = now.UTC()
+	b.persist()
+	if b.win != nil {
+		b.win.Invalidate()
+	}
+}
+func (b *browser) flushPlayerProgress(p *playerWindow) {
+	if p.native == nil && p.view != nil {
+		p.captureWebPosition(p.view.Page())
+	}
+	b.recordPlaybackProgress(p, time.Now(), true)
+}
+func (b *browser) drawHistoryResume(c *ui.Context, e entry) {
+	if e.Kind != "動画" {
+		return
+	}
+	if !e.LastViewedAt.IsZero() {
+		ui.Text(c, "最終視聴: "+e.LastViewedAt.Local().Format("2006-01-02 15:04")).FontSize(12).Wrap()
+	}
+	if e.PositionKnown {
+		text := "視聴位置: " + formatPlaybackTime(time.Duration(e.PositionSeconds*float64(time.Second)))
+		if e.DurationSeconds > 0 {
+			text += " / " + formatPlaybackTime(time.Duration(e.DurationSeconds*float64(time.Second)))
+		}
+		if e.Completed {
+			text = "視聴完了"
+		}
+		ui.Text(c, text).FontSize(12).Wrap()
+	}
+	ui.Row(c).Wrap().Gap(4).Children(func() {
+		if e.PositionKnown && !e.Completed && e.PositionSeconds > 0 {
+			if ui.Button(c, "続きから").Label(e.Title + "を続きから再生").Clicked() {
+				b.openPlayer(historyPlaybackURL(e, true))
+			}
+		}
+		if ui.Button(c, "最初から").Label(e.Title + "を最初から再生").Clicked() {
+			b.openPlayer(historyPlaybackURL(e, false))
+		}
+	})
+}

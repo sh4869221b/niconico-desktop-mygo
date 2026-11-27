@@ -83,6 +83,7 @@ function player() {
         old, video, route, controller, present, mediaEvent,
         setContent(...videos) { content = videos; },
         snapshot() { return Array.from(window.__nicoDesktopMedia.snapshot()); },
+        historySnapshot() { return Array.from(window.__nicoDesktopMedia.historySnapshot()); },
         restore(...params) { return window.__nicoDesktopMedia.restore(...params); },
         leave() {
             navigation.get('navigate')({
@@ -221,4 +222,17 @@ test('an old play promise resolving after replacement cannot acknowledge the new
     assert.equal(p.restore(1, 'sm9', 85.25, false, false), 'wait');
     assert.equal(p.video.currentTime, 85.25);
     assert.equal(p.restore(1, 'sm9', 85.25, false, false), 'play');
+});
+
+
+test('history snapshot carries verified duration and completion without changing restore snapshots', () => {
+    const p = player();
+    assert.deepEqual(p.historySnapshot(), [a, 'sm9', 60, true, 172, false]);
+    assert.deepEqual(p.snapshot(), [a, 'sm9', 60, true]);
+    p.video.currentTime = 172;
+    p.video.ended = true;
+    assert.deepEqual(p.historySnapshot(), [a, 'sm9', 172, true, 172, true]);
+    p.video.duration = Infinity;
+    // Unverifiable media must not replace the last confirmed history sample.
+    assert.deepEqual(p.historySnapshot(), [a, 'sm9', 172, true, 172, true]);
 });

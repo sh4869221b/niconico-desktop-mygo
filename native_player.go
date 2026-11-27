@@ -292,6 +292,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				b.recordVideo(p, p.target, p.title)
 			}
 		}
+		b.recordPlaybackProgress(p, time.Now(), false)
 		current := s.Position()
 		compact := w < 780
 		var body ui.Element

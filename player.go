@@ -20,6 +20,9 @@ type playerWindow struct {
 	target, title, status  string
 	commentLanguageWarning bool
 	historySuppressed      map[string]bool
+	lastHistoryWrite       time.Time
+	lastHistoryVideo       string
+	saveHistory            func(bool)
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
 	playedWatch            screenRoute
@@ -157,10 +160,12 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			return
 		}
 		if p := b.player; p != nil && p.mode != mode {
+			b.flushPlayerProgress(p)
 			b.player = nil
 			p.win.Close()
 		}
 		if p := b.player; p != nil {
+			b.flushPlayerProgress(p)
 			p.resumeHistory(route.link)
 			if p.mode == nativePlayback {
 				b.loadNativePlayer(p, route)
@@ -187,6 +192,8 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 		})
 		_ = p.win.SetIcon(appIconPNG)
 		b.player = p
+		p.saveHistory = func(force bool) { b.recordPlaybackProgress(p, time.Now(), force) }
+		p.win.OnClose(func(*mygo.CloseEvent) { b.flushPlayerProgress(p) })
 		p.win.OnClosed(func() {
 			// MyGo destroys WebViews owned by a closed window.
 			if b.player == p {
@@ -236,6 +243,9 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		return b.browseFromPlayer(p, dest, false)
 	}
 	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
+		if p.saveHistory != nil {
+			p.saveHistory(true)
+		}
 		dest := routeFor(e.URL)
 		if !active() || allowedURL(e.URL) == nil || b.handoffWatch(p, dest) ||
 			(e.UserInitiated || dest.isSearchPage()) && routeLink(dest) {
@@ -416,6 +426,7 @@ func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active fun
 	if route.kind == screenVideo {
 		p.applyWebRestore(page, route)
 		p.captureWebPosition(page)
+		b.recordPlaybackProgress(p, time.Now(), false)
 		if !active() || d.loading || page.URL() != raw {
 			return
 		}
@@ -481,6 +492,9 @@ func (p *playerWindow) setWebTitle() {
 }
 
 func (p *playerWindow) load(target string) {
+	if p.saveHistory != nil {
+		p.saveHistory(true)
+	}
 	if p.view == nil || allowedURL(target) == nil {
 		return
 	}

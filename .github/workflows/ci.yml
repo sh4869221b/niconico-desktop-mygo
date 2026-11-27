@@ -27,6 +27,8 @@ jobs:
           go-version-file: go.mod
       - name: Test
         run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows
+      - name: Test player media bridge
+        run: node --test player_web.test.cjs
       - name: Test Media Foundation
         run: go test -mod=readonly -v github.com/egoist/mygo/ui/video
       - name: Vet

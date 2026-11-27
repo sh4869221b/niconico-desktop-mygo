@@ -308,6 +308,9 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
 		return
 	}
+	if i := slices.IndexFunc(b.data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+		e = copyHistoryProgress(e, b.data.History[i])
+	}
 	if e.Title == e.URL {
 		if i := slices.IndexFunc(b.data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
 			e.Title = b.data.History[i].Title
@@ -315,6 +318,9 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	}
 	if len(b.data.History) > 0 && b.data.History[0] == e {
 		return
+	}
+	if e.LastViewedAt.IsZero() {
+		e.LastViewedAt = time.Now().UTC()
 	}
 	b.data.History = putFirst(b.data.History, e, 100)
 	b.persist()
@@ -534,6 +540,9 @@ func (b *browser) sidebar(c *ui.Context) {
 							return
 						}
 					})
+					if b.history {
+						b.drawHistoryResume(row, item)
+					}
 				}
 			})
 		})
