@@ -57,14 +57,13 @@ func (c catalog) series(ctx context.Context, r screenRoute) (catalogPage, error)
 	directory := r.kind == screenUserSeries
 	page := catalogPage{title: "シリーズ", emptyNotice: "表示できるシリーズ動画はありません。"}
 	path := "/v2/series/" + r.key
-	query := url.Values{"page": {strconv.Itoa(r.page + 1)}, "pageSize": {strconv.Itoa(seriesVideoPageSize)}}
+	requestSize := seriesVideoPageSize
 	if directory {
 		path = "/v1/users/" + r.key + "/series"
 		page.title, page.emptyNotice = "シリーズ一覧", "公開されているシリーズはありません。"
-		// This endpoint returns the user's series as one directory. The UI
-		// pages that directory separately from the server-paged video lists.
-		query = nil
+		requestSize = pageSize
 	}
+	query := url.Values{"page": {strconv.Itoa(r.page + 1)}, "pageSize": {strconv.Itoa(requestSize)}}
 	result, err := c.seriesResponse(ctx, path, query, false)
 	if seriesDenied(err) && c.session != nil && ctx.Err() == nil {
 		result, err = c.seriesResponse(ctx, path, query, true)
@@ -79,6 +78,14 @@ func (c catalog) series(ctx context.Context, r screenRoute) (catalogPage, error)
 		return page, err
 	}
 	data := result.Data
+	if data.HasNext != nil {
+		page.more = *data.HasNext
+	} else if data.TotalCount != nil {
+		page.more = hasMore(nil, r.page, *data.TotalCount, requestSize)
+	} else {
+		// Hidden or unavailable rows still occupy positions in the server page.
+		page.more = len(data.Items) >= requestSize
+	}
 	if directory {
 		hasPrivate := false
 		for _, entry := range data.Items {
@@ -100,10 +107,6 @@ func (c catalog) series(ctx context.Context, r screenRoute) (catalogPage, error)
 		if hasPrivate && len(page.items) == 0 {
 			page.emptyNotice = "この投稿者のシリーズは非公開です。"
 		}
-		start := min(r.page*pageSize, len(page.items))
-		end := min(start+pageSize, len(page.items))
-		page.more = end < len(page.items)
-		page.items = page.items[start:end]
 		return page, nil
 	}
 	if title := strings.TrimSpace(data.Detail.Title); title != "" {
@@ -112,13 +115,6 @@ func (c catalog) series(ctx context.Context, r screenRoute) (catalogPage, error)
 	page.summary, page.links, page.description = plainDescription(data.Detail.Description)
 	page.publisher = data.Detail.Owner.publisher("user")
 	page.author = page.publisher.name
-	if data.HasNext != nil {
-		page.more = *data.HasNext
-	} else if data.TotalCount != nil {
-		page.more = (r.page+1)*seriesVideoPageSize < *data.TotalCount
-	} else {
-		page.more = len(data.Items) == seriesVideoPageSize
-	}
 	for _, entry := range data.Items {
 		if item, ok := entry.Video.card(); ok {
 			page.items = append(page.items, item)

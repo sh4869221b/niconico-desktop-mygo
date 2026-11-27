@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -53,13 +55,11 @@ func TestSeriesRoutesAndSessionScope(t *testing.T) {
 }
 
 func TestSeriesLoadPagesAndPlayThroughCatalog(t *testing.T) {
-	entries := make([]struct {
-		ID    int
-		Title string
-	}, pageSize+1)
+	entries := make([]any, pageSize)
 	for i := range entries {
-		entries[i].ID, entries[i].Title = 456+i, "シリーズのタイトル"
+		entries[i] = map[string]any{"id": 456 + i, "title": "シリーズのタイトル"}
 	}
+	entries[pageSize-1] = map[string]any{"id": 999, "isPublic": false}
 	directoryJSON, err := json.Marshal(entries)
 	if err != nil {
 		t.Fatal(err)
@@ -73,10 +73,21 @@ func TestSeriesLoadPagesAndPlayThroughCatalog(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/users/123/series":
-			if r.URL.RawQuery != "" {
-				t.Fatal("unexpected server pagination on the directory")
+			q := r.URL.Query()
+			if q.Get("pageSize") != strconv.Itoa(pageSize) {
+				t.Fatalf("directory page size: %v", q)
 			}
-			return testResponse(200, `{"meta":{"status":200},"data":{"items":`+string(directoryJSON)+`}}`), nil
+			switch q.Get("page") {
+			case "1":
+				// Without a total, the raw count keeps the next page enabled
+				// even though one entry cannot be shown.
+				return testResponse(200, `{"meta":{"status":200},"data":{"items":`+string(directoryJSON)+`}}`), nil
+			case "2":
+				return testResponse(200, fmt.Sprintf(`{"meta":{"status":200},"data":{"totalCount":%d,"items":[{"id":987,"title":"次ページのシリーズ"}]}}`, pageSize+1)), nil
+			default:
+				t.Fatalf("unexpected directory page: %v", q)
+				return nil, nil
+			}
 		case "/v2/series/456":
 			q := r.URL.Query()
 			if q.Get("pageSize") != "100" || (q.Get("page") != "1" && q.Get("page") != "2") {
@@ -106,12 +117,19 @@ func TestSeriesLoadPagesAndPlayThroughCatalog(t *testing.T) {
 		t.Fatalf("wrong directory route: %+v", directory)
 	}
 	first, err := c.load(t.Context(), directory)
-	if err != nil || len(first.items) != pageSize || !first.more {
+	if err != nil || len(first.items) != pageSize-1 || !first.more {
 		t.Fatalf("first directory page: %d items, next %t, %v", len(first.items), first.more, err)
 	}
-	second, err := c.load(t.Context(), directory.withPage(1))
+	b.result = first
+	view.Frame()
+	secondRoute := click("次へ")
+	second, err := c.load(t.Context(), secondRoute)
 	if err != nil || len(second.items) != 1 || second.more || second.items[0].link == first.items[0].link {
 		t.Fatalf("second directory page: %+v, %v", second, err)
+	}
+	view.Frame()
+	if firstRoute := click("最初のページ"); firstRoute != directory {
+		t.Fatalf("first-page button changed the directory: %+v", firstRoute)
 	}
 	b.result = first
 	view.Frame()
