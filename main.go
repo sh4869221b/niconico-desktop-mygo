@@ -27,6 +27,7 @@ type browser struct {
 	libraryPath, storeWarning    string
 	commentLanguageWarning       bool
 	data                         library
+	pendingLibraryEdits          []func(*library) bool
 	history, loaded, closed      bool
 	showLibrary                  bool
 	session                      *mygo.Session
@@ -303,16 +304,25 @@ func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) 
 		if err != nil {
 			return err
 		}
+		dirty := false
+		for _, pending := range b.pendingLibraryEdits {
+			dirty = pending(&latest) || dirty
+		}
 		changed = edit(&latest)
-		if changed {
+		if dirty || changed {
 			return saveLibrary(b.libraryPath, latest)
 		}
 		return nil
 	})
 	if err != nil {
-		b.status = "保存に失敗しました。操作はこのセッションにのみ反映されます。"
-		return edit(&b.data), false
+		changed = edit(&b.data)
+		if changed {
+			b.pendingLibraryEdits = append(b.pendingLibraryEdits, edit)
+		}
+		b.status = "保存に失敗しました。次に登録や履歴を操作したときに再試行します。"
+		return changed, false
 	}
+	b.pendingLibraryEdits = nil
 	b.data = latest
 	return changed, true
 }
@@ -373,7 +383,8 @@ func (b *browser) remove(e entry) {
 		b.status = b.storeWarning
 		return
 	}
-	if b.history {
+	history := b.history
+	if history {
 		if p := b.player; p != nil {
 			if p.historySuppressed == nil {
 				p.historySuppressed = make(map[string]bool)
@@ -383,7 +394,7 @@ func (b *browser) remove(e entry) {
 	}
 	_, saved := b.changeLibrary(func(data *library) bool {
 		items := &data.Pins
-		if b.history {
+		if history {
 			items = &data.History
 		}
 		before := len(*items)

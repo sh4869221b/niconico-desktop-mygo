@@ -173,3 +173,40 @@ func TestLibraryMutationDoesNotOverwriteNewlyCorruptedFile(t *testing.T) {
 		t.Fatal("save failure was not reflected in the current session")
 	}
 }
+
+func TestLibraryRetriesPendingEditsInOrderAfterStorageRecovers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "library.json")
+	b := &browser{index: -1, closed: true, libraryPath: path}
+	p := &playerWindow{}
+	b.player = p
+	const a = home + "watch/sm9"
+	const other = home + "watch/sm11"
+	old, _ := makeEntry(home+"watch/sm12", "削除する履歴")
+	b.data.History = []entry{old}
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b.navigate(a)
+	b.pinCurrent()
+	b.history = true
+	b.remove(old)
+	b.history = false
+	if len(b.pendingLibraryEdits) != 2 || len(b.data.Pins) != 1 || len(b.data.History) != 0 {
+		t.Fatalf("failed changes were not retained: %+v", b.data)
+	}
+
+	otherPin, _ := makeEntry(other, "別プロセスの登録")
+	if err := saveLibrary(path, library{Pins: []entry{otherPin}, History: []entry{old}}); err != nil {
+		t.Fatal(err)
+	}
+	b.recordVideo(p, a, "視聴した動画")
+	actual, err := loadLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b.pendingLibraryEdits) != 0 || len(actual.Pins) != 2 ||
+		actual.Pins[0].URL != a || actual.Pins[1] != otherPin ||
+		len(actual.History) != 1 || actual.History[0].URL != a {
+		t.Fatalf("the next transaction did not combine and persist all operations: %+v", actual)
+	}
+}
