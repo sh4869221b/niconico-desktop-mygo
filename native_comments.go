@@ -65,7 +65,12 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 		n.ngNotice = "NG設定を保存できませんでした。"
 		return
 	}
+	selected := n.selectedComment
 	n.applyCommentNG(b.commentNG.blocked)
+	if edit.block {
+		n.commentList.Choose(min(selected, len(n.commentRows)-1))
+		n.focusCommentList = true
+	}
 	if edit.block {
 		n.ngNotice = "NGに登録しました。"
 	} else {
@@ -113,6 +118,7 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		return
 	}
 	n.commentList.Key = func(i int) any { return n.commentRows[i] }
+	n.commentList.Selected = &n.selectedComment
 	follow := &n.follow
 	force := !follow.positioned || at < follow.lastAt || at-follow.lastAt > 250*time.Millisecond
 	follow.lastAt = at
@@ -134,6 +140,7 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		line.ContextMenu(func(m *ui.Menu) {
 			n.follow.manual = true
 			if m.Item("このユーザーを NG").Disabled(row.author.ID == "" || b.commentNG.path == "").Chosen() {
+				n.commentList.Choose(i)
 				n.pendingNG = commentNGEdit{row.author, true}
 				c.Invalidate()
 			}
@@ -141,7 +148,7 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 			ui.Text(c, formatPlaybackTime(time.Duration(row.VposMs)*time.Millisecond)).Width(46).TextColor(t.TextMuted)
 			ui.Text(c, row.Body).Grow(1).MinWidth(0).Wrap()
 		})
-	}).Grow(1).MinHeight(0).FillWidth().Focusable().ObserveInput(func(ev ui.InputEvent) {
+	}).Grow(1).MinHeight(0).FillWidth().Focusable().Label("コメント一覧の行").ObserveInput(func(ev ui.InputEvent) {
 		switch ev.Kind {
 		case ui.InputPointerDown:
 			n.follow.manual = true
@@ -157,6 +164,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		}
 		return false
 	})
+	if n.focusCommentList && n.commentList.Focus(c) {
+		n.focusCommentList = false
+	}
 }
 
 func (b *browser) drawCommentNG(c *ui.Context, n *nativePlayer) {

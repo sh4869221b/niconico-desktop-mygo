@@ -41,6 +41,8 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	selectedComment       int
+	focusCommentList      bool
 }
 
 const defaultNativeVolume = 80
