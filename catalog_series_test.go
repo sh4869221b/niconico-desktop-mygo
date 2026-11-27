@@ -138,7 +138,7 @@ func TestSeriesLoadPagesAndPlayThroughCatalog(t *testing.T) {
 		t.Fatalf("wrong series route: %+v", detail)
 	}
 	page, err := c.load(t.Context(), detail)
-	if err != nil || len(page.items) != 1 || !page.more || page.publisher.name != "投稿者名" {
+	if err != nil || len(page.items) != 2 || page.items[1].link != "" || !page.more || page.publisher.name != "投稿者名" {
 		t.Fatalf("series video page: %+v, %v", page, err)
 	}
 	b.result = page
