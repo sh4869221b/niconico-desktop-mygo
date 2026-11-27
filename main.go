@@ -371,6 +371,9 @@ func (b *browser) copyCurrent() {
 		b.status = "クリップボードにコピーできませんでした。"
 	} else {
 		b.status = "go-nico-list用のURLをコピーしました。"
+		if mylistCopyCondition(b.current()) != "" {
+			b.status += " " + mylistCopyCondition(b.current())
+		}
 	}
 }
 
@@ -478,6 +481,9 @@ func (b *browser) toolbar(c *ui.Context) {
 			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
 				b.copyCurrent()
 			}
+			if notice := mylistCopyCondition(b.current()); notice != "" {
+				ui.Text(c, notice).Wrap().TextColor(t.TextMuted)
+			}
 			if ui.Button(c, "設定").Clicked() {
 				b.showPlaybackSettings = !b.showPlaybackSettings
 			}
@@ -538,4 +544,11 @@ func (b *browser) sidebar(c *ui.Context) {
 			})
 		})
 	})
+}
+
+func mylistCopyCondition(raw string) string {
+	if _, kind := canonical(raw); kind == "マイリスト" && goNicoListURL(raw) != "" {
+		return "非公開のリストは外部ツールでは取得できません。"
+	}
+	return ""
 }
