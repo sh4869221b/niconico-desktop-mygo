@@ -30,7 +30,7 @@ jobs:
       - name: Test
         run: go test -mod=readonly ./... github.com/egoist/mygo/internal/windows github.com/egoist/mygo/internal/gpu/d3d11
       - name: Compare native player D3D11 pixels
-        if: github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
+        if: always() && !cancelled() && github.ref == 'refs/heads/codex/danmaku-gpu-astra-max'
         shell: pwsh
         run: ./testdata/danmaku_gpu/compare.ps1
       - name: Vet

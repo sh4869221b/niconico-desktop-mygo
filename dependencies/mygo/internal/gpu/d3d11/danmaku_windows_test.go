@@ -70,14 +70,28 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 	if newBatches >= oldBatches {
 		t.Fatalf("same-device probe did not join runs: %d to %d", oldBatches, newBatches)
 	}
-	if tight, _ := draw(true, true); !bytes.Equal(base, tight) {
-		t.Fatal("cropped D3D11 mask changed BGRA pixels")
-	}
-	if !bytes.Equal(base, joined) {
-		for i, v := range base {
-			if v != joined[i] {
-				t.Fatalf("BGRA byte %d changed from %d to %d", i, v, joined[i])
-			}
+	compare := func(name string, actual []byte) {
+		t.Helper()
+		if bytes.Equal(base, actual) {
+			return
 		}
+		first, count, largest := -1, 0, 0
+		for i, want := range base {
+			if actual[i] == want {
+				continue
+			}
+			if first < 0 {
+				first = i
+			}
+			count++
+			d := int(actual[i]) - int(want)
+			largest = max(largest, d, -d)
+		}
+		t.Errorf("%s: %d of %d BGRA bytes changed, largest delta %d, first (%d,%d) channel %d: %d to %d", name, count, len(base), largest, first/4%s.Width, first/(4*s.Width), first%4, base[first], actual[first])
 	}
+	compare("join", joined)
+	cropped, _ := draw(false, true)
+	compare("trim alone", cropped)
+	both, _ := draw(true, true)
+	compare("join and trim", both)
 }
