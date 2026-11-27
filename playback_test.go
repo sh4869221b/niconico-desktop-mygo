@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,6 +11,21 @@ import (
 	"strings"
 	"testing"
 )
+
+type decoderErrorFixture struct{ error }
+
+func (decoderErrorFixture) MediaFoundationCodes() (uint32, uint32) { return 4, 0xc00d36c4 }
+
+func TestNativeDecoderFailureShowsOnlySafeDetails(t *testing.T) {
+	private := errors.New("could not open http://127.0.0.1:80/signed-playlist")
+	const stage = "decoder startup failed"
+	if got := nativeDecoderFailure(stage, private); got != stage {
+		t.Fatalf("decoder details escaped the status: %q", got)
+	}
+	if got := nativeDecoderFailure(stage, decoderErrorFixture{private}); got != stage+" (Media Foundation 4, 0xC00D36C4)" {
+		t.Fatalf("incorrect Media Foundation details: %q", got)
+	}
+}
 
 func TestPlaybackPreference(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "folder", "playback.json")

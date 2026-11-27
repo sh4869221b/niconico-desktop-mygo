@@ -113,7 +113,7 @@ func (e *mfEngine) startFrame() (media.Picture, bool, bool) {
 		if e.captureStart(s, pts) {
 			return e.picture(true)
 		}
-		// Preroll advanced beyond the target. Restore it while still muted.
+		// Restore the target while still muted if the frame cannot be used.
 		if !e.seekStart(s) {
 			return e.startError("Media Foundation could not restore the initial position")
 		}

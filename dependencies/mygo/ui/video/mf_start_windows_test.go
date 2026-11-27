@@ -93,4 +93,16 @@ func TestMediaFoundationAcceptsTargetFrameBeforeSeekNotification(t *testing.T) {
 	if !start.acceptPicture(2, 20_000_000, func() bool { return true }) || start.phase != startReady {
 		t.Fatal("discarded a valid target frame while the seeked notification was pending")
 	}
+	// The delayed startup notification arrives after PresentStart cleared
+	// the startup state. It must not advance a paused picture by one frame.
+	engine := &mfEngine{}
+	engine.event(eventSeeked, 0, 0)
+	if engine.seekEvents != 1 || engine.landed {
+		t.Fatal("the startup seek notification armed a normal playback frame step")
+	}
+	engine.seekSince = time.Now()
+	engine.event(eventSeeked, 0, 0)
+	if engine.seekEvents != 2 || !engine.landed || !engine.seekSince.IsZero() {
+		t.Fatal("the normal playback seek did not arm its frame step")
+	}
 }

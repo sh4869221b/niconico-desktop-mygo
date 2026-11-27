@@ -401,13 +401,25 @@ func bstr(s string) uintptr {
 	return b
 }
 
+type mfPlaybackError struct {
+	code, extended uint32
+}
+
+func (e mfPlaybackError) Error() string {
+	return fmt.Sprintf("video: Media Foundation could not play the video (error %d, %#x)", e.code, e.extended)
+}
+
+func (e mfPlaybackError) MediaFoundationCodes() (code, extended uint32) {
+	return e.code, e.extended
+}
+
 // event takes an event of the engine, on a thread of Media Foundation's.
 func (e *mfEngine) event(event uint32, param1 uintptr, param2 uint32) {
 	e.mu.Lock()
 	switch event {
 	case eventError:
 		e.state = media.Failed
-		e.err = fmt.Errorf("video: Media Foundation could not play the video (error %d, %#x)", param1, param2)
+		e.err = mfPlaybackError{code: uint32(param1), extended: param2}
 	case eventEnded:
 		if !e.loop {
 			e.state = media.Ended
@@ -422,8 +434,12 @@ func (e *mfEngine) event(event uint32, param1 uintptr, param2 uint32) {
 		}
 	case eventSeeked:
 		e.seekEvents++
-		e.seekSince = time.Time{}
-		e.landed = true
+		// Startup manages its own seek and can present before its notification
+		// arrives. Only an ordinary Seek can arm the paused-seek frame step.
+		if !e.seekSince.IsZero() {
+			e.seekSince = time.Time{}
+			e.landed = true
+		}
 	case eventLoadedMetadata, eventLoadedData, eventDurationChange, eventFrameStepCompleted, eventFirstFrameReady:
 	default:
 		e.mu.Unlock()

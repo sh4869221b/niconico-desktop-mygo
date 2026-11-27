@@ -172,6 +172,15 @@ func (n *nativePlayer) failStream(message string) {
 	n.status = message + " 公式 WebView で開き直してください。"
 }
 
+func nativeDecoderFailure(message string, err error) string {
+	var failure interface{ MediaFoundationCodes() (uint32, uint32) }
+	if errors.As(err, &failure) {
+		code, extended := failure.MediaFoundationCodes()
+		message += fmt.Sprintf(" (Media Foundation %d, 0x%08X)", code, extended)
+	}
+	return message
+}
+
 // A startup deadline only requests a view rebuild. The current player checks
 // it on that frame, after any visibility change, so an old deadline cannot
 // close a replacement stream.
@@ -253,13 +262,13 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		})
 		s := n.stream
 		if s != nil {
-			switch {
-			case s.Err() != nil:
+			switch decodeErr := s.Err(); {
+			case decodeErr != nil:
+				message := "Windows の動画再生機能で最初の映像を準備できませんでした。"
 				if s.Ready() && !s.Preparing() {
-					n.failStream("Windows の動画再生機能で再生が止まりました。")
-				} else {
-					n.failStream("Windows の動画再生機能で最初の映像を準備できませんでした。")
+					message = "Windows の動画再生機能で再生が止まりました。"
 				}
+				n.failStream(nativeDecoderFailure(message, decodeErr))
 			case (s.Preparing() || !s.Ready()) && n.startExpired(c):
 				if s.Ready() {
 					n.failStream("最初の映像を取得しましたが、表示が完了しませんでした。")
