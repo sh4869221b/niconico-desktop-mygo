@@ -238,6 +238,8 @@ type catalogPage struct {
 	publisher              videoPublisher
 	emptyNotice            string
 	more                   bool
+	total                  *int
+	rawCount               int
 }
 
 type catalog struct {
@@ -394,13 +396,17 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 		UserID, ChannelID                          json.RawMessage
 	}
 	result, err := decodeJSON[struct {
-		Meta struct{ Status, TotalCount int }
+		Meta struct {
+			Status     int
+			TotalCount *int
+		}
 		Data []row
 	}](data)
 	if err != nil || result.Meta.Status != 200 || result.Data == nil {
 		return p, errors.New("検索結果を取得できませんでした")
 	}
-	p.more = (r.page+1)*searchPageSize < min(result.Meta.TotalCount, snapshotResultLimit)
+	p.total, p.rawCount = result.Meta.TotalCount, len(result.Data)
+	p.more = r.page < p.lastSearchPage() && (p.total != nil || p.rawCount == searchPageSize)
 	for _, item := range result.Data {
 		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
