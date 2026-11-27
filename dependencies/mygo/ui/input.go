@@ -53,8 +53,8 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		// Input, which the next frame builds even out of sight.
 		rt.input = true
 	}
-	if (ev.Kind == platform.SurfaceShown || ev.Kind == platform.SurfaceHidden) && !rt.visibleTime.updated.IsZero() {
-		rt.updateVisibleTime()
+	if (ev.Kind == platform.SurfaceShown || ev.Kind == platform.SurfaceHidden) && rt.visibleTime != nil {
+		rt.visibleTime()
 	}
 	// The window's DIPs, zoomed, are the content's.
 	rt.fromWindow(&ev)

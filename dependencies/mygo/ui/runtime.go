@@ -486,7 +486,7 @@ type engine struct {
 	// hiddenAsked tells that a view asked whether the window shows
 	// (WindowHidden), which builds it again as that changes.
 	hiddenAsked bool
-	visibleTime visibleClock
+	visibleTime func() (time.Duration, bool)
 	painted     [3]float32
 	gen         uint64
 	// repaintRate is the most frames a second the drawings that move ask

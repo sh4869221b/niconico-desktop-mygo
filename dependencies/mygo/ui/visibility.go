@@ -27,22 +27,20 @@ func (c *Context) WindowVisibleTime() (elapsed time.Duration, hidden bool) {
 	}
 	rt := raw.rt
 	rt.hiddenAsked = true
-	rt.updateVisibleTime()
-	return rt.visibleTime.elapsed, rt.visibleTime.hidden
-}
-
-type visibleClock struct {
-	updated time.Time
-	elapsed time.Duration
-	hidden  bool
-}
-
-func (rt *engine) updateVisibleTime() {
-	clock, now := &rt.visibleTime, rt.now()
-	if !clock.updated.IsZero() && !clock.hidden {
-		clock.elapsed += now.Sub(clock.updated)
+	if rt.visibleTime == nil {
+		var updated time.Time
+		var elapsed time.Duration
+		var hidden bool
+		rt.visibleTime = func() (time.Duration, bool) {
+			now := rt.now()
+			if !updated.IsZero() && !hidden {
+				elapsed += now.Sub(updated)
+			}
+			updated, hidden = now, rt.videoOccluded()
+			return elapsed, hidden
+		}
 	}
-	clock.updated, clock.hidden = now, rt.videoOccluded()
+	return rt.visibleTime()
 }
 
 // videoOccluded checks the surface itself. The frame that readies a new
