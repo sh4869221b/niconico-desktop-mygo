@@ -90,6 +90,7 @@ func (b *browser) start(initial string) {
 		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
+	_ = b.win.SetIcon(appIconPNG)
 	b.session = mygo.NewSession("niconico-desktop-mygo")
 	b.catalog = newCatalog(func(target string) (*http.Cookie, error) {
 		return readSessionCookie(b.session.Cookies.List, target, time.Now())
