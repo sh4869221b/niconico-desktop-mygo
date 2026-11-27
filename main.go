@@ -23,7 +23,8 @@ var version = "dev"
 type browser struct {
 	win                          *mygo.Window
 	web                          *mygo.WebView
-	field, source, title, status string
+	source, title, status        string
+	searchInput                  searchInput
 	libraryPath, storeWarning    string
 	commentLanguageWarning       bool
 	data                         library
@@ -213,6 +214,7 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
 		b.status = "ニコニコ公式ページ"
 		if !b.loaded {
@@ -242,6 +244,7 @@ func (b *browser) attachOfficial() {
 		raw := p.URL()
 		if !b.playOfficialLink(view, raw, true) && b.loaded && raw != b.source {
 			b.source = raw
+			b.showSearchRoute(routeFor(raw))
 			b.win.Invalidate()
 		}
 	})
@@ -262,14 +265,6 @@ func (b *browser) loadOfficial(target string) {
 		b.status = "ページを開けませんでした。"
 	}
 	b.win.Invalidate()
-}
-
-func (b *browser) search(byTag bool) {
-	if target := resolve(b.field, byTag); target != "" {
-		b.navigate(target)
-	} else {
-		b.status = "検索語・タグ・動画ID、またはニコニコ公式のHTTPS URLを入力してください。"
-	}
 }
 
 func (b *browser) current() string {
@@ -450,15 +445,19 @@ func (b *browser) toolbar(c *ui.Context) {
 			if ui.Button(c, "ホーム").Clicked() {
 				b.navigate(home)
 			}
-			input := ui.TextInput(c, &b.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
+			input := ui.TextInput(c, &b.searchInput.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
 			if c.Shortcut(ui.Ctrl, ui.KeyL) {
 				input.Focus()
 			}
-			if ui.PrimaryButton(c, "検索").Clicked() || input.Submitted() {
+			keyword := ui.PrimaryButton(c, "検索").Tooltip("キーワード検索").Checked(b.searchInput.active && !b.searchInput.byTag)
+			tag := ui.Button(c, "タグ検索").Checked(b.searchInput.active && b.searchInput.byTag)
+			switch {
+			case keyword.Clicked():
 				b.search(false)
-			}
-			if ui.Button(c, "タグ検索").Clicked() {
+			case tag.Clicked():
 				b.search(true)
+			case input.Submitted():
+				b.search(b.searchInput.byTag)
 			}
 		})
 		ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
