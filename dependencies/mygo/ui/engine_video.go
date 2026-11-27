@@ -73,6 +73,10 @@ func (v *videoEngine) play() {
 		return
 	}
 	v.paused = false
+	if v.preparing != nil {
+		v.wakeWindow()
+		return
+	}
 	if v.state == media.Ended {
 		v.e.Seek(0)
 		v.state = media.Ready
@@ -88,7 +92,9 @@ func (v *videoEngine) pause() {
 		return
 	}
 	v.paused = true
-	v.e.Pause()
+	if v.preparing == nil {
+		v.e.Pause()
+	}
 	v.wakeWindow()
 }
 
@@ -104,7 +110,7 @@ func (v *videoEngine) position() time.Duration {
 }
 
 func (v *videoEngine) seek(d time.Duration) {
-	if v.closed {
+	if v.closed || v.preparing != nil {
 		return
 	}
 	v.e.Seek(max(d, 0))

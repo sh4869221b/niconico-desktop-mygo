@@ -29,13 +29,12 @@ func TestMediaFoundationPreparesInitialPicture(t *testing.T) {
 				mf := engine.(*mfEngine)
 				mf.PrepareStart(at)
 				mf.SetMuted(false)
-				const getMuted = 34 // IMFMediaEngine::GetMuted
 				tick := time.NewTicker(time.Second / 60)
 				defer tick.Stop()
 				deadline := time.NewTimer(12 * time.Second)
 				defer deadline.Stop()
 				for {
-					if call(mf.engine, getMuted) == 0 {
+					if call(mf.engine, engineGetMuted) == 0 {
 						t.Fatal("audio gate opened before receiving a frame")
 					}
 					pic, _, ok := mf.Frame(time.Now())
@@ -56,7 +55,7 @@ func TestMediaFoundationPreparesInitialPicture(t *testing.T) {
 							t.Fatalf("clock moved before presentation: %fs, requested %s", position, at)
 						}
 						mf.PresentStart()
-						if call(mf.engine, getMuted) != 0 || call(mf.engine, engineIsPaused) == 0 {
+						if call(mf.engine, engineGetMuted) != 0 || call(mf.engine, engineIsPaused) == 0 {
 							t.Fatal("presentation did not restore sound while leaving playback paused")
 						}
 						return
@@ -70,5 +69,15 @@ func TestMediaFoundationPreparesInitialPicture(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestMediaFoundationStartRejectsStalePictureAndMovingClock(t *testing.T) {
+	at := 2 * time.Second
+	if !mfStartMatches(at, 2, 19_900_000) ||
+		mfStartMatches(at, 2, 0) ||
+		mfStartMatches(at, 2, 25_000_000) ||
+		mfStartMatches(at, 2.1, 20_000_000) {
+		t.Fatal("startup frame must belong to the requested paused position")
 	}
 }

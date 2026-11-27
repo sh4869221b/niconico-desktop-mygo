@@ -27,6 +27,7 @@ type mfStart struct {
 	seekBefore uint64
 	prerolled  bool
 	stepped    bool
+	reseeked   bool
 }
 
 func (e *mfEngine) PrepareStart(at time.Duration) {
@@ -61,6 +62,10 @@ func (e *mfEngine) seekStart(s *mfStart) bool {
 }
 
 func (e *mfEngine) playPreroll(s *mfStart) bool {
+	if call(e.engine, engineGetMuted) == 0 &&
+		(failed(call(e.engine, engineSetMuted, 1)) || call(e.engine, engineGetMuted) == 0) {
+		return false
+	}
 	s.prerolled, s.phase = true, startPreroll
 	return !failed(call(e.engine, enginePlay))
 }
@@ -78,7 +83,7 @@ func (e *mfEngine) startFrame() (media.Picture, bool, bool) {
 	if ready < haveMetadata {
 		return media.Picture{}, false, false
 	}
-	if call(e.engine, engineHasVideo) == 0 {
+	if call(e.engine, engineHasVideo) == 0 && ready >= haveCurrentData {
 		return e.startError("Media Foundation found no video track")
 	}
 	if s.phase == startLoad {
@@ -140,6 +145,13 @@ func (e *mfEngine) startFrame() (media.Picture, bool, bool) {
 		// still has to match both the requested clock and the frame time.
 		s.stepped = true
 		call(e.ex, engineExFrameStep, 1)
+	} else if fresh && s.stepped && !s.reseeked {
+		// FrameStep can advance the clock. With the decoder now warm, seek
+		// again and require a new picture from the initial position.
+		s.reseeked = true
+		if !e.seekStart(s) {
+			return e.startError("Media Foundation could not restore the initial position after stepping")
+		}
 	}
 	return media.Picture{}, false, false
 }
@@ -148,6 +160,6 @@ func mfStartMatches(target time.Duration, seconds float64, pts int64) bool {
 	// GetCurrentTime is the paused clock; the decoded frame can begin
 	// before it (the requested time can lie inside that frame).
 	nearClock := math.Abs(seconds-target.Seconds()) <= 0.016
-	frameTime := float64(pts) / 10_000_000
-	return nearClock && pts >= 0 && math.Abs(frameTime-target.Seconds()) <= 0.25
+	offset := float64(pts)/10_000_000 - target.Seconds()
+	return nearClock && pts >= 0 && offset >= -0.25 && offset <= 0.10
 }

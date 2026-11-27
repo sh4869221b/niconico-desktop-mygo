@@ -15,6 +15,8 @@ type commentNGEdit struct {
 type commentFollow struct {
 	manual, positioned bool
 	lastRow            int
+	lastAt             time.Duration
+	lastScroll         time.Time
 }
 
 func (f *commentFollow) row(at time.Duration, comments []timedComment, rows []int) (int, bool) {
@@ -73,7 +75,7 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 
 func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Duration) {
 	t := c.Theme()
-	ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).FillWidth().Wrap().Gap(5).AlignItems(ui.Center).Children(func() {
 		label := "コメント一覧"
 		switchLabel := "NG管理"
 		if n.manageNG {
@@ -111,8 +113,17 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		return
 	}
 	n.commentList.Key = func(i int) any { return n.commentRows[i] }
-	if row, move := n.follow.row(at, n.allComments, n.commentRows); move {
-		n.commentList.ScrollTo(row, ui.Start)
+	follow := &n.follow
+	force := !follow.positioned || at < follow.lastAt || at-follow.lastAt > 250*time.Millisecond
+	follow.lastAt = at
+	if force || c.Now().Sub(follow.lastScroll) >= 100*time.Millisecond {
+		if row, move := follow.row(at, n.allComments, n.commentRows); move {
+			first, last := n.commentList.Visible()
+			if force || row < first || row > first+(last-first)*2/3 {
+				n.commentList.ScrollTo(row, ui.Start)
+				follow.lastScroll = c.Now()
+			}
+		}
 	}
 	ui.List(c, &n.commentList, len(n.commentRows), func(i int) {
 		row := n.allComments[n.commentRows[i]]

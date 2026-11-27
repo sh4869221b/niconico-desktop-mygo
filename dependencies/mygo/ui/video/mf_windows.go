@@ -108,6 +108,7 @@ const (
 	engineSetLoop             = 31
 	enginePlay                = 32
 	enginePause               = 33
+	engineGetMuted            = 34
 	engineSetMuted            = 35
 	engineSetVolume           = 37
 	engineHasVideo            = 38
@@ -656,11 +657,7 @@ func (e *mfEngine) Play() {
 	call(e.engine, enginePlay)
 }
 
-func (e *mfEngine) Pause() {
-	if e.start == nil {
-		call(e.engine, enginePause)
-	}
-}
+func (e *mfEngine) Pause() { call(e.engine, enginePause) }
 
 func (e *mfEngine) Seek(d time.Duration) {
 	e.mu.Lock()

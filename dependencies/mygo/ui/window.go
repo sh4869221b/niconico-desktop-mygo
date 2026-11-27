@@ -530,7 +530,7 @@ func (h *windowHost) present(s *scene.Scene) {
 		h.conn.Surface.PresentPixels(m.Pix, m.Stride, m.W, m.H)
 	}
 	h.refreshPresented()
-	if startup != nil {
+	if startup != nil && startup.startImage != nil {
 		for _, op := range s.Ops {
 			if op.Image == startup.startImage && op.Rect.W > 0 && op.Rect.H > 0 && op.Image.Pixels() != nil {
 				startup.presentedStart()
@@ -627,7 +627,7 @@ func (h *windowHost) render(s *scene.Scene, startup *videoEngine) bool {
 		var err error
 		if r, ok := g.(interface {
 			RenderStart(*scene.Scene, uint64) (bool, error)
-		}); ok && startup != nil {
+		}); ok && startup != nil && startup.startImage != nil {
 			var shown bool
 			shown, err = r.RenderStart(s, startup.startImage.ID())
 			if shown && err == nil {

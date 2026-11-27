@@ -309,6 +309,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			seconds := current.Seconds()
 			if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Disabled(s.Preparing()).Changed() {
 				s.Seek(time.Duration(seconds * float64(time.Second)))
+				n.follow.positioned = false
 			}
 			ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackTime(duration))
 			volume := s.Volume() * 100
@@ -336,6 +337,9 @@ func (n *nativePlayer) togglePanel(panel nativePlayerPanel) {
 		n.panel = noPlayerPanel
 	} else {
 		n.panel = panel
+		if panel == commentPanel {
+			n.follow.positioned = false
+		}
 	}
 }
 
