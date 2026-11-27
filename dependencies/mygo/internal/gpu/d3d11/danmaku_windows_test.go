@@ -23,7 +23,9 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 	rgb := make([]byte, 4*len(mask))
 	for i := range mask {
 		a := byte(31*i + 17*(i/side))
-		mask[i] = a
+		if x, y := i%side, i/side; x >= 3 && x < side-2 && y >= 4 && y < side-1 {
+			mask[i] = a
+		}
 		rgb[4*i], rgb[4*i+1], rgb[4*i+2], rgb[4*i+3] = a, 255-a, byte(7*i), 255
 	}
 	s.MaskAtlas.Put(2, 2, side, side, mask, side)
@@ -33,7 +35,11 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 		for i := range 25 {
 			x, y := float32((i*23+layer*3)%166-8), float32((i*17+layer)%101-5)
 			color := scene.Color{R: byte(31 * layer), G: byte(37 * i), B: byte(29*layer + 3*i), A: byte(131 + (5*i+layer)%125)}
-			s.Glyphs = append(s.Glyphs, scene.Glyph{X: x, Y: y, W: side, H: side, U: 2, V: 2, UW: side, VH: side, Color: color, Subpixel: layer%2 != 0})
+			var blank scene.GlyphInsets
+			if layer%2 == 0 {
+				blank = scene.GlyphInsets{Left: 3, Top: 4, Right: 2, Bottom: 1}
+			}
+			s.Glyphs = append(s.Glyphs, scene.Glyph{Blank: blank, X: x, Y: y, W: side, H: side, U: 2, V: 2, UW: side, VH: side, Color: color, Subpixel: layer%2 != 0})
 		}
 		s.Ops = append(s.Ops, scene.Op{Kind: scene.OpGlyphs, Start: int32(first), End: int32(len(s.Glyphs))})
 	}
@@ -47,9 +53,9 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer r.Release()
-	draw := func(join bool) ([]byte, int) {
+	draw := func(join, trim bool) ([]byte, int) {
 		t.Helper()
-		r.b.JoinGlyphs = join
+		r.b.JoinGlyphs, r.b.TrimStroke = join, trim
 		if err := r.draw(s); err != nil {
 			t.Fatal(err)
 		}
@@ -59,10 +65,13 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 		}
 		return pix, len(r.b.Batches)
 	}
-	base, oldBatches := draw(false)
-	joined, newBatches := draw(true)
+	base, oldBatches := draw(false, false)
+	joined, newBatches := draw(true, false)
 	if newBatches >= oldBatches {
 		t.Fatalf("same-device probe did not join runs: %d to %d", oldBatches, newBatches)
+	}
+	if tight, _ := draw(true, true); !bytes.Equal(base, tight) {
+		t.Fatal("cropped D3D11 mask changed BGRA pixels")
 	}
 	if !bytes.Equal(base, joined) {
 		for i, v := range base {

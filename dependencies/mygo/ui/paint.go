@@ -1150,7 +1150,7 @@ func (p *Painter) textStrokes(l *text.Layout, x, y float32, color Color, ts text
 			stroke = stroke.Alpha(p.opacity)
 			p.s.Glyphs = append(p.s.Glyphs, scene.Glyph{
 				X: float32(math.Floor(float64(pen))) + gi.Left, Y: glyphBaseline(sys, &g, line, y, baseline, gs) + gi.Top, W: float32(gi.W), H: float32(gi.H),
-				U: gi.X, V: gi.Y, UW: gi.W, VH: gi.H,
+				U: gi.X, V: gi.Y, UW: gi.W, VH: gi.H, Blank: gi.Blank,
 				Transform: gs.inlineTransform(p, g.Cluster, moves),
 				Color:     stroke.scene(), Wide: p.glyphWide(stroke),
 			})

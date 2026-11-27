@@ -270,6 +270,8 @@ type Builder struct {
 	// order under one dual-source pipeline, including runs larger than
 	// joinArea. Enabled by D3D11 for the fill and outline of text.
 	JoinGlyphs bool
+	// TrimStroke omits transparent stroke texels on the one-to-one pixel grid.
+	TrimStroke bool
 	// Classes separates batches for renderers with specialized fragment shaders
 	// (Metal's and Direct3D 11's).
 	Classes bool
@@ -604,9 +606,16 @@ func (b *Builder) Build(s *scene.Scene, image func(*scene.Image) uintptr) *scene
 				if g.Thin {
 					boost = scene.ThinBoost
 				}
+				x, y := float32(math.Round(float64(g.X))), float32(math.Round(float64(g.Y)))
+				if p := g.Blank; b.TrimStroke && !op.Transform.Set && !g.Transform.Set && p != (scene.GlyphInsets{}) {
+					x, y = x+float32(p.Left), y+float32(p.Top)
+					g.U, g.V = g.U+uint16(p.Left), g.V+uint16(p.Top)
+					g.UW -= uint16(p.Left) + uint16(p.Right)
+					g.VH -= uint16(p.Top) + uint16(p.Bottom)
+				}
 				aw, ah := float32(a.W), float32(a.H)
 				in := Instance{
-					Rect:   [4]float32{float32(math.Round(float64(g.X))), float32(math.Round(float64(g.Y))), float32(g.UW), float32(g.VH)},
+					Rect:   [4]float32{x, y, float32(g.UW), float32(g.VH)},
 					Radii:  s.Text.GammaRatios,
 					Inner:  [4]float32{contrast, boost},
 					UV:     [4]float32{float32(g.U) / aw, float32(g.V) / ah, float32(g.U+g.UW) / aw, float32(g.V+g.VH) / ah},

@@ -1,6 +1,10 @@
 package text
 
-import "math"
+import (
+	"math"
+
+	"github.com/egoist/mygo/internal/scene"
+)
 
 // strokeBitmap returns the coverage of a stroke along the edge of the
 // coverage of b, reaching r pixels to each side of it, round at corners:
@@ -82,4 +86,23 @@ func strokeBitmap(b bitmap, r float32) bitmap {
 		}
 	}
 	return bitmap{left: b.left - pad, top: b.top - pad, w: w, h: h, pix: pix}
+}
+
+// strokeMargins finds the ink once, while the new mask is still in memory.
+// A wider margin can be left partly in the quad without affecting its pixels.
+func strokeMargins(b bitmap) scene.GlyphInsets {
+	left, top, right, bottom := b.w, b.h, -1, -1
+	for y := range b.h {
+		for x, a := range b.pix[y*b.w : (y+1)*b.w] {
+			if a != 0 {
+				left, top = min(left, x), min(top, y)
+				right, bottom = max(right, x), max(bottom, y)
+			}
+		}
+	}
+	if right < left {
+		return scene.GlyphInsets{}
+	}
+	return scene.GlyphInsets{Left: uint8(min(left, 255)), Top: uint8(min(top, 255)),
+		Right: uint8(min(b.w-1-right, 255)), Bottom: uint8(min(b.h-1-bottom, 255))}
 }
