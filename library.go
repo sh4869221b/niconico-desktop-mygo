@@ -123,3 +123,19 @@ func saveLibrary(path string, l library) error {
 	}
 	return os.Rename(f.Name(), path)
 }
+
+// Only replace generated placeholders; meaningful saved names belong to the user.
+func (l *library) fillPinTitle(raw, title string) bool {
+	e, ok := makeEntry(raw, title)
+	if !ok || e.Title == e.URL {
+		return false
+	}
+	for i := range l.Pins {
+		pin := &l.Pins[i]
+		if pin.URL == e.URL && pin.Title == pin.URL && pin.Title != e.Title {
+			pin.Title = e.Title
+			return true
+		}
+	}
+	return false
+}

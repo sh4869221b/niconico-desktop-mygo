@@ -115,6 +115,9 @@ func (b *browser) refreshNative() {
 			}
 			b.result, b.resultErr, b.busy = p, err, false
 			b.status = p.searchMode
+			if err == nil && b.data.fillPinTitle(r.link, p.title) {
+				b.persist()
+			}
 			b.win.Invalidate()
 		})
 	}()

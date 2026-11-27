@@ -202,6 +202,9 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.title = e.Title
+		if b.data.fillPinTitle(p.URL(), e.Title) {
+			b.persist()
+		}
 		b.win.Invalidate()
 	})
 	p.OnDidFinishLoad(func() {
@@ -316,6 +319,7 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if len(b.data.History) > 0 && b.data.History[0] == e {
 		return
 	}
+	b.data.fillPinTitle(raw, title)
 	b.data.History = putFirst(b.data.History, e, 100)
 	b.persist()
 	b.win.Invalidate()
@@ -329,6 +333,9 @@ func (b *browser) pinCurrent() {
 	if b.storeWarning != "" {
 		b.status = b.storeWarning
 		return
+	}
+	if b.data.fillPinTitle(e.URL, e.Title) {
+		b.persist()
 	}
 	if len(b.data.Pins) >= 500 || slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == e.URL }) {
 		b.status = "登録済み、または登録件数が上限に達しています。"
