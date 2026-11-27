@@ -207,14 +207,28 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 	checkPicture := func(scale string) {
 		t.Helper()
 		img := view.Image()
+		longest, consecutive := 0, 0
 		for y := 0; y < img.Bounds().Dy(); y++ {
+			painted := false
 			for x := 0; x < img.Bounds().Dx(); x++ {
 				if img.RGBAAt(x, y) == green {
-					return
+					painted = true
+					break
 				}
 			}
+			if painted {
+				consecutive++
+				longest = max(longest, consecutive)
+			} else {
+				consecutive = 0
+			}
 		}
-		t.Fatalf("video disappeared with expanded overview, tags and comments at %s", scale)
+		// A few painted pixels can pass even when the video is clipped to
+		// a sliver. Require a visible band above the original 49.6 DIP case.
+		const minimum = 80
+		if longest < minimum {
+			t.Fatalf("video painted %d pixels vertically at %s, want at least %d", longest, scale, minimum)
+		}
 	}
 	focus := func(label string) {
 		t.Helper()
@@ -232,6 +246,8 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 		checkPicture(fmt.Sprintf("%.1f text scale", scale))
 	}
 	view.SetPreferences(ui.Preferences{})
+	view.SetZoom(1.5)
+	checkPicture("1.5× UI zoom")
 	view.SetZoom(2)
 	checkPicture("2× UI zoom")
 	view.SetZoom(1)
