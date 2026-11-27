@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,6 +15,7 @@ import (
 type nativePlayer struct {
 	cancel                context.CancelFunc
 	stream                *ui.VideoPlayer
+	relay                 *hlsRelay
 	startDeadline         time.Duration
 	loadingStream         bool
 	pauseRequested        bool
@@ -87,20 +89,22 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		source, err := nativeStream(req, route.key, session)
 		cancelReq()
 		local := ""
+		var relay *hlsRelay
 		if err == nil {
-			local, _, err = startHLS(ctx, source)
+			local, relay, err = startHLS(ctx, source)
+			if err != nil {
+				err = errors.New("配信のローカル中継を開始できませんでした。")
+			}
 		}
 		mygo.RunOnMain(func() {
 			if !active() {
 				return
 			}
-			n.loadingStream = false
+			n.loadingStream, n.relay = false, relay
 			if err != nil {
-				n.cancel()
-				n.status = "独自プレーヤーで再生できませんでした。 " + err.Error()
+				n.failStream(err.Error())
 			} else if n.stream, err = video.OpenURL(local); err != nil {
-				n.cancel()
-				n.status = "Windowsの動画再生機能で配信を開けませんでした。"
+				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
 				n.stream.SetVolume(b.nativeVolume / 100)
 				if n.stream.PrepareStart(n.startAt) {
@@ -153,11 +157,28 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	}()
 }
 
-func (n *nativePlayer) failStart(message string) {
+func (n *nativePlayer) failStream(message string) {
+	if n.relay != nil {
+		if reason := n.relay.lastFailure.Load(); reason != nil {
+			message += " 中継で記録した直近のエラーは「" + *reason + "」です。"
+		}
+		n.relay = nil
+	}
 	n.cancel()
-	n.stream.Close()
-	n.stream = nil
-	n.status = message
+	if n.stream != nil {
+		n.stream.Close()
+		n.stream = nil
+	}
+	n.status = message + " 公式 WebView で開き直してください。"
+}
+
+func nativeDecoderFailure(message string, err error) string {
+	var failure interface{ MediaFoundationCodes() (uint32, uint32) }
+	if errors.As(err, &failure) {
+		code, extended := failure.MediaFoundationCodes()
+		message += fmt.Sprintf(" (Media Foundation %d, 0x%08X)", code, extended)
+	}
+	return message
 }
 
 // A startup deadline only requests a view rebuild. The current player checks
@@ -241,11 +262,19 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		})
 		s := n.stream
 		if s != nil {
-			switch {
-			case s.Err() != nil:
-				n.failStart("配信を再生できませんでした。公式 WebView で開き直してください。")
+			switch decodeErr := s.Err(); {
+			case decodeErr != nil:
+				message := "Windows の動画再生機能で最初の映像を準備できませんでした。"
+				if s.Ready() && !s.Preparing() {
+					message = "Windows の動画再生機能で再生が止まりました。"
+				}
+				n.failStream(nativeDecoderFailure(message, decodeErr))
 			case (s.Preparing() || !s.Ready()) && n.startExpired(c):
-				n.failStart("最初の映像を表示できませんでした。公式 WebView で開き直してください。")
+				if s.Ready() {
+					n.failStream("最初の映像を取得しましたが、表示が完了しませんでした。")
+				} else {
+					n.failStream("制限時間内に最初の映像を取得できませんでした。")
+				}
 			}
 			s = n.stream
 		}

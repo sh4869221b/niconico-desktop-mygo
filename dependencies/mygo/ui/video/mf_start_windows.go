@@ -98,43 +98,41 @@ func (e *mfEngine) startFrame() (media.Picture, bool, bool) {
 			return media.Picture{}, false, false
 		}
 	}
-	seeking := call(e.engine, engineIsSeeking) != 0
 	var pts int64
-	if s.phase == startSeeking {
-		e.mu.Lock()
-		seeked := e.seekEvents != s.seekBefore
-		e.mu.Unlock()
-		if !seeked || seeking {
-			call(e.engine, engineOnVideoStreamTick, uintptr(unsafe.Pointer(&pts)))
-			if !s.prerolled && !e.playPreroll(s) {
-				return e.startError("Media Foundation could not prepare the initial frame")
-			}
-			return media.Picture{}, false, false
-		}
-		s.phase = startPaused
-	}
 	fresh := call(e.engine, engineOnVideoStreamTick, uintptr(unsafe.Pointer(&pts))) == 0
+	seeking := call(e.engine, engineIsSeeking) != 0
 	if s.phase == startPreroll {
 		if !fresh || seeking {
 			return media.Picture{}, false, false
 		}
-		// Preroll may advance the clock. Discard its picture and restore
-		// the original position before exposing a frame or restoring sound.
 		if failed(call(e.engine, enginePause)) {
 			return e.startError("Media Foundation could not stop preroll")
 		}
+		// Avoid seeking to the same position if preroll produced the target
+		// picture before the clock moved. A no-op seek may never notify us.
+		if e.captureStart(s, pts) {
+			return e.picture(true)
+		}
+		// Restore the target while still muted if the frame cannot be used.
 		if !e.seekStart(s) {
 			return e.startError("Media Foundation could not restore the initial position")
 		}
 		return media.Picture{}, false, false
 	}
-	if fresh && !seeking && call(e.engine, engineIsPaused) != 0 &&
-		mfStartMatches(s.target, callGetDouble(e.engine, engineGetCurrentTime), pts) && e.captureFrame() {
-		s.phase = startReady
-		e.mu.Lock()
-		e.landed = false
-		e.mu.Unlock()
+	// The target frame can arrive before the async seeked notification.
+	// Transfer it on this tick once the seek, clock and frame agree.
+	if fresh && !seeking && e.captureStart(s, pts) {
 		return e.picture(true)
+	}
+	if s.phase == startSeeking {
+		e.mu.Lock()
+		seeked := e.seekEvents != s.seekBefore
+		e.mu.Unlock()
+		if seeked && !seeking {
+			s.phase = startPaused
+		} else if s.prerolled {
+			return media.Picture{}, false, false
+		}
 	}
 	if !s.prerolled {
 		if !e.playPreroll(s) {
@@ -154,6 +152,25 @@ func (e *mfEngine) startFrame() (media.Picture, bool, bool) {
 		}
 	}
 	return media.Picture{}, false, false
+}
+
+func (e *mfEngine) captureStart(s *mfStart, pts int64) bool {
+	if call(e.engine, engineIsSeeking) != 0 || call(e.engine, engineIsPaused) == 0 ||
+		!s.acceptPicture(callGetDouble(e.engine, engineGetCurrentTime), pts, e.captureFrame) {
+		return false
+	}
+	e.mu.Lock()
+	e.landed = false
+	e.mu.Unlock()
+	return true
+}
+
+func (s *mfStart) acceptPicture(clock float64, pts int64, transfer func() bool) bool {
+	if !mfStartMatches(s.target, clock, pts) || !transfer() {
+		return false
+	}
+	s.phase = startReady
+	return true
 }
 
 func mfStartMatches(target time.Duration, seconds float64, pts int64) bool {
