@@ -3,13 +3,14 @@ package d3d11
 import (
 	"bytes"
 	"runtime"
+	"slices"
 	"testing"
 
 	"github.com/egoist/mygo/internal/scene"
 )
 
-// Compare the old and experimental batch policy on the same D3D device.
-// The runs exceed the normal small-batch area and overlap in draw order.
+// Exercise ordered, overlapping mask, subpixel and color glyphs with both
+// the existing all-class shader and the two mixed-text class shaders.
 func TestOutlinedGlyphBatches(t *testing.T) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -33,7 +34,7 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 		for i := range 25 {
 			x, y := float32((i*23+layer*3)%166-8), float32((i*17+layer)%101-5)
 			color := scene.Color{R: byte(31 * layer), G: byte(37 * i), B: byte(29*layer + 3*i), A: byte(131 + (5*i+layer)%125)}
-			s.Glyphs = append(s.Glyphs, scene.Glyph{X: x, Y: y, W: side, H: side, U: 2, V: 2, UW: side, VH: side, Color: color, Subpixel: layer%2 != 0})
+			s.Glyphs = append(s.Glyphs, scene.Glyph{X: x, Y: y, W: side, H: side, U: 2, V: 2, UW: side, VH: side, Color: color, Subpixel: i%2 != 0, Colored: layer%2 != 0 && i%8 == 2})
 		}
 		s.Ops = append(s.Ops, scene.Op{Kind: scene.OpGlyphs, Start: int32(first), End: int32(len(s.Glyphs))})
 	}
@@ -42,32 +43,40 @@ func TestOutlinedGlyphBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer destroyWindow(hwnd)
-	r, err := New(hwnd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Release()
-	draw := func(join bool) ([]byte, int) {
+	old := classShaders
+	defer func() { classShaders = old }()
+	draw := func(sets []classShader) []byte {
 		t.Helper()
-		r.b.JoinGlyphs = join
+		classShaders = sets
+		r, err := New(hwnd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer r.Release()
 		if err := r.draw(s); err != nil {
 			t.Fatal(err)
+		}
+		mixed := false
+		for _, b := range r.b.Batches {
+			if b.Classes() == 48 || b.Classes() == 112 {
+				mixed = true
+			}
+		}
+		if !mixed {
+			t.Fatal("fixture did not exercise mixed glyphs")
 		}
 		pix, _, err := r.read()
 		if err != nil {
 			t.Fatal(err)
 		}
-		return pix, len(r.b.Batches)
+		return pix
 	}
-	base, oldBatches := draw(false)
-	joined, newBatches := draw(true)
-	if newBatches >= oldBatches {
-		t.Fatalf("same-device probe did not join runs: %d to %d", oldBatches, newBatches)
-	}
-	if !bytes.Equal(base, joined) {
+	baseline := slices.DeleteFunc(slices.Clone(old), func(s classShader) bool { return s.classes == 48 || s.classes == 112 })
+	base, specialized := draw(baseline), draw(old)
+	if !bytes.Equal(base, specialized) {
 		for i, v := range base {
-			if v != joined[i] {
-				t.Fatalf("BGRA byte %d changed from %d to %d", i, v, joined[i])
+			if v != specialized[i] {
+				t.Fatalf("BGRA byte %d changed from %d to %d", i, v, specialized[i])
 			}
 		}
 	}

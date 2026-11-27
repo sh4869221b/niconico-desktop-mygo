@@ -33,8 +33,17 @@ try {
     if ($LASTEXITCODE) { throw "Cannot check out the baseline" }
     $a = @(Read-Frames $old "baseline")
     $b = @(Read-Frames $here "candidate")
+    $diff = @()
     for ($i=0; $i -lt $a.Count; $i++) {
-        if ($a[$i] -cne $b[$i]) { throw "Frame $i differs. Baseline $($a[$i]). Candidate $($b[$i])." }
+        if ($a[$i] -cne $b[$i]) { $diff += "Frame $i differs. Baseline $($a[$i]). Candidate $($b[$i])." }
+    }
+    if ($diff.Count) {
+        $repeat = @(Read-Frames $old "baseline-repeat")
+        for ($i=0; $i -lt $a.Count; $i++) {
+            if ($a[$i] -cne $repeat[$i]) { throw "Baseline is not reproducible at frame $i." }
+        }
+        $diff | Select-Object -First 3 | Write-Host
+        throw "$($diff.Count) of $($a.Count) frames differ from the repeatable baseline."
     }
     Write-Output "54 DirectWrite/D3D11 readbacks, active counts and glyph counts match $base."
 } finally {

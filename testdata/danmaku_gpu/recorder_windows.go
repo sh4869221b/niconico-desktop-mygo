@@ -3,6 +3,6 @@ package ui
 
 import "github.com/egoist/mygo/internal/gpu/d3d11"
 
-func (r *Recorder) DanmakuTestBGRA() ([]byte, [3]int, error) {
+func (r *Recorder) DanmakuTestBGRA() ([]byte, [6]int, error) {
 	return d3d11.DanmakuReadback(r.h.last)
 }

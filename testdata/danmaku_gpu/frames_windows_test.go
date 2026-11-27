@@ -28,7 +28,7 @@ func TestCompareD3D11Danmaku(t *testing.T) {
 					t.Fatal(err)
 				}
 				if i == 1 && size.scale == 1 {
-					t.Logf("WORK %s active=%d instances=%d batches=%d mask/ClearType-pixels=%d", density.name, len(n.danmaku.active), work[0], work[1], work[2])
+					t.Logf("WORK %s active=%d instances=%d batches=%d mask/ClearType-pixels=%d mixed-text-batches=%d mixed-color-batches=%d mixed-glyph-pixels=%d", density.name, len(n.danmaku.active), work[0], work[1], work[2], work[3], work[4], work[5])
 				}
 				t.Logf("FRAME %s %d %d %g %d %d %d %x", density.name, size.w, size.h, size.scale, ms, len(n.danmaku.active), len(frame.Glyphs), sha256.Sum256(pixels))
 			}

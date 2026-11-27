@@ -11,10 +11,10 @@ import (
 // DanmakuReadback returns BGRA, built instances, built batches and the sum
 // of mask/ClearType quad areas inside the batch scissors. A fresh target
 // draws the whole frame, independently of the window's presentation policy.
-func DanmakuReadback(s *scene.Scene) ([]byte, [3]int, error) {
+func DanmakuReadback(s *scene.Scene) ([]byte, [6]int, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	var work [3]int
+	var work [6]int
 	hwnd, err := newHiddenWindow(s.Width, s.Height)
 	if err != nil {
 		return nil, work, err
@@ -30,6 +30,12 @@ func DanmakuReadback(s *scene.Scene) ([]byte, [3]int, error) {
 	}
 	work[0], work[1] = len(r.b.Instances), len(r.b.Batches)
 	for _, batch := range r.b.Batches {
+		switch batch.Classes() {
+		case 48:
+			work[3]++
+		case 112:
+			work[4]++
+		}
 		for _, in := range r.b.Instances[batch.Start : batch.Start+batch.Count] {
 			if in.Params[0] != 2 && in.Params[0] != 5 {
 				continue
@@ -39,6 +45,9 @@ func DanmakuReadback(s *scene.Scene) ([]byte, [3]int, error) {
 			w := max(0, min(x+int(box[2]), int(batch.Scissor.Right))-max(x, int(batch.Scissor.Left)))
 			h := max(0, min(y+int(box[3]), int(batch.Scissor.Bottom))-max(y, int(batch.Scissor.Top)))
 			work[2] += w * h
+			if classes := batch.Classes(); classes == 48 || classes == 112 {
+				work[5] += w * h
+			}
 		}
 	}
 	pixels, _, err := r.read()

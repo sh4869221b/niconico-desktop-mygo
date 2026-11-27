@@ -266,10 +266,6 @@ type Builder struct {
 	// NoClasses puts every batch in ClassGeneral, for tests and
 	// measurements that compare the specialized shaders with the general one.
 	NoClasses bool
-	// JoinGlyphs keeps adjacent runs of mask and subpixel glyphs in draw
-	// order under one dual-source pipeline, including runs larger than
-	// joinArea. Enabled by D3D11 for the fill and outline of text.
-	JoinGlyphs bool
 	// Classes separates batches for renderers with specialized fragment shaders
 	// (Metal's and Direct3D 11's).
 	Classes bool
@@ -726,10 +722,7 @@ func (b *Builder) joinLast() {
 		}
 	}
 	fits := area <= joinArea
-	const textClasses = 1<<ClassGlyph | 1<<ClassSubpixel
-	last := &b.Batches[max(n-2, 0)]
-	textRun := b.JoinGlyphs && (last.Classes()|bt.Classes())&^textClasses == 0
-	if n > 1 && (b.joinSmall && fits || textRun) && last.Scissor == bt.Scissor &&
+	if last := &b.Batches[max(n-2, 0)]; n > 1 && b.joinSmall && fits && last.Scissor == bt.Scissor &&
 		last.ClipMask == bt.ClipMask && last.Opaque == bt.Opaque && last.Effect == nil && bt.Effect == nil && !last.Hole && !bt.Hole &&
 		(last.Image == 0 || bt.Image == 0 || last.Image == bt.Image) {
 		if j := last.Classes() | bt.Classes(); j != 1<<last.Class {
