@@ -41,6 +41,7 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	videoID               string
 }
 
 const defaultNativeVolume = 80
@@ -100,6 +101,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			} else if n.stream, err = video.OpenURL(local); err != nil {
 				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
+				n.videoID = source.watch.Video.ID
 				n.stream.SetVolume(b.nativeVolume / 100)
 				if n.stream.PrepareStart(n.startAt) {
 					n.startAt = 0

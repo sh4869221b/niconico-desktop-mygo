@@ -156,6 +156,10 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 		if b.closed || b.playbackRequest != request {
 			return
 		}
+		var restore *webPlaybackRestore
+		if p := b.player; p != nil && p.mode == nativePlayback && mode == webPlayback {
+			restore = p.nativeWebRestore(route, time.Now())
+		}
 		if p := b.player; p != nil && p.mode != mode {
 			b.player = nil
 			p.win.Close()
@@ -179,6 +183,9 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			return
 		}
 		p := &playerWindow{mode: mode, target: route.target, webVideo: route.link, status: "再生を準備しています…"}
+		if restore != nil {
+			p.restoring, p.restoreToken, p.target = restore, restore.token, restore.target
+		}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
