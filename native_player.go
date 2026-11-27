@@ -41,6 +41,8 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	quality               streamQuality
+	qualityRestore        *nativeQualityState
 }
 
 const defaultNativeVolume = 80
@@ -64,11 +66,19 @@ func (p *playerWindow) stopNative() {
 }
 
 func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
+	b.loadNativePlayerQuality(p, route, qualityAuto, nil)
+}
+
+func (b *browser) loadNativePlayerQuality(p *playerWindow, route screenRoute, quality streamQuality, restore *nativeQualityState) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &nativePlayer{
 		cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
 		showComments: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
+	}
+	n.quality, n.qualityRestore = quality, restore
+	if restore != nil {
+		n.startAt, n.pauseRequested = restore.at, restore.paused
 	}
 	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
@@ -80,7 +90,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	active := func() bool { return !b.closed && b.player == p && p.native == n }
 	go func() {
 		req, cancelReq := context.WithTimeout(ctx, 25*time.Second)
-		source, err := nativeStream(req, route.key, session)
+		source, err := nativeStreamQuality(req, route.key, session, quality)
 		cancelReq()
 		local := ""
 		var relay *hlsRelay
@@ -101,6 +111,10 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
 				n.stream.SetVolume(b.nativeVolume / 100)
+				if restore != nil {
+					n.stream.SetVolume(restore.volume)
+					n.stream.SetMuted(restore.muted)
+				}
 				if n.stream.PrepareStart(n.startAt) {
 					n.startAt = 0
 				}
@@ -235,6 +249,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		ui.Scroll(c.Key("player-toolbar")).FillWidth().MaxHeight(h * 0.15).Shrink(0).Children(func() {
 			ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "独自プレーヤー（試験版）").Bold()
+				b.drawNativeQuality(c, p, n)
 				if ui.Button(c, "公式 WebView で開く").Clicked() {
 					b.openPlayerMode(p.target, webPlayback)
 				}
