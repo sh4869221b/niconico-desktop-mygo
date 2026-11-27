@@ -16,6 +16,22 @@ import (
 	"github.com/egoist/mygo/ui/video"
 )
 
+// TestMain owns the OS main thread locked by MyGo's initialization. Go test
+// executes individual tests on worker goroutines, which cannot run App.Run.
+var measure58Run = make(chan chan error)
+
+func TestMain(m *testing.M) {
+	finished := make(chan int, 1)
+	go func() { finished <- m.Run() }()
+	select {
+	case result := <-measure58Run:
+		result <- mygo.App.Run()
+		os.Exit(<-finished)
+	case code := <-finished:
+		os.Exit(code)
+	}
+}
+
 var seek58Log *json.Encoder
 
 func traceSeek58(target time.Duration) {
@@ -71,7 +87,9 @@ func TestMeasure58(t *testing.T) {
 		})})
 		p.win.OnClosed(func() { cancel(); s.Close(); mygo.App.Quit() })
 	})
-	if err := mygo.App.Run(); err != nil {
+	result := make(chan error)
+	measure58Run <- result
+	if err := <-result; err != nil {
 		t.Fatal(err)
 	}
 	if openErr != nil {
