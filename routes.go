@@ -13,7 +13,7 @@ const mylists = home + "my/mylist"
 const login = "https://account.nicovideo.jp/login"
 
 var videoID = regexp.MustCompile("(?i)^(sm|nm|so)[0-9]+$")
-var shortPath = regexp.MustCompile("(?i)^/?(watch/((sm|nm|so)?[0-9]+)|mylist/[0-9]+|user/[0-9]+(/video|/mylist(/[0-9]+)?)?)$")
+var shortPath = regexp.MustCompile("(?i)^/?(watch/((sm|nm|so)?[0-9]+)|mylist/[0-9]+|series/[0-9]+|user/[0-9]+(/video|/(mylist|series)(/[0-9]+)?)?)$")
 var schemePrefix = regexp.MustCompile("(?i)^[a-z][a-z0-9+.-]*:")
 var pathPunctuation = strings.NewReplacer("+", "%2B", ":", "%3A", "@", "%40", "=", "%3D", "$", "%24", "&", "%26")
 var sortKey = regexp.MustCompile("^[a-z]{1,4}$")
@@ -95,6 +95,9 @@ func canonical(raw string) (string, string) {
 		if videoID.MatchString(p) {
 			return home + "watch/" + strings.ToLower(p), "動画"
 		}
+		if id, ok := strings.CutPrefix(p, "series/"); ok && numeric(id, 12) {
+			return home + p, "シリーズ"
+		}
 		return "", ""
 	}
 	if !siteHost(u) {
@@ -138,6 +141,8 @@ func canonical(raw string) (string, string) {
 	switch {
 	case strings.HasPrefix(p, "watch/"):
 		return home + p, "動画"
+	case strings.HasPrefix(p, "series/") || strings.Contains(p, "/series"):
+		return home + p, "シリーズ"
 	case strings.Contains(p, "mylist"):
 		return home + p, "マイリスト"
 	default:

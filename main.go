@@ -51,6 +51,9 @@ type browser struct {
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
 	nativeVolume                 float64
+
+	searchSortPath, searchSortNotice string
+	searchDefault                    searchSortPreference
 }
 
 func main() {
@@ -72,6 +75,8 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
+		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
 			b.playMode = mode
 		} else {
@@ -90,6 +95,7 @@ func (b *browser) start(initial string) {
 		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
+	_ = b.win.SetIcon(appIconPNG)
 	b.session = mygo.NewSession("niconico-desktop-mygo")
 	b.catalog = newCatalog(func(target string) (*http.Cookie, error) {
 		return readSessionCookie(b.session.Cookies.List, target, time.Now())

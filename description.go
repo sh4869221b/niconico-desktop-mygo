@@ -162,6 +162,10 @@ func (b *browser) followDescription(target string) {
 		b.openPlayer(target)
 		return
 	}
+	b.browseInMain(target)
+}
+
+func (b *browser) browseInMain(target string) {
 	b.navigate(target)
 	if b.win != nil {
 		b.win.Show()

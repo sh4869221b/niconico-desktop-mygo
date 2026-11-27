@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -136,7 +137,8 @@ func TestThumbnailGestureIgnoresDragAndDoubleClick(t *testing.T) {
 
 func TestSearchSortAndPagingWithKeyboard(t *testing.T) {
 	r := routeFor(home + "tag/kitty?page=3")
-	app := browser{navigation: []screenRoute{r}, result: catalogPage{more: true}, closed: true}
+	path := filepath.Join(t.TempDir(), "search-sort.json")
+	app := browser{navigation: []screenRoute{r}, result: catalogPage{more: true}, searchSortPath: path, closed: true}
 	view := ui.NewTester(app.draw, 640, 520)
 	keyboardSelect := func(label string, moves int) {
 		t.Helper()
@@ -173,4 +175,42 @@ func TestSearchSortAndPagingWithKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(1, true)
+	if err := view.Click("最初のページ"); err != nil {
+		t.Fatal(err)
+	}
+	check(0, true)
+	if err := view.Click("戻る"); err != nil {
+		t.Fatal(err)
+	}
+	check(1, true)
+	restarted := browser{index: -1, searchDefault: loadSearchSort(path), closed: true}
+	restarted.navigate(home + "search/explicit?sort=f&order=d")
+	if got := accountSearchParameters(restarted.navigation[restarted.index]); got.Get("sortKey") != "registeredAt" || got.Get("sortOrder") != "desc" {
+		t.Fatalf("explicit query was changed: %v", got)
+	}
+	restarted.navigate(home + "tag/fresh?page=3")
+	if got := accountSearchParameters(restarted.navigation[restarted.index]); got.Get("sortKey") != "viewCount" || got.Get("sortOrder") != "asc" || got.Get("page") != "3" {
+		t.Fatalf("restarted application's sort was not restored: %v", got)
+	}
+	restarted.moveNative(-1)
+	if got := accountSearchParameters(restarted.navigation[restarted.index]); got.Get("sortKey") != "registeredAt" {
+		t.Fatalf("history's sort was replaced: %v", got)
+	}
+	if pref := loadSearchSort(path); pref != (searchSortPreference{Sort: "v", Ascending: true}) {
+		t.Fatalf("navigation overwrote the saved sort: %+v", pref)
+	}
+}
+
+func TestPostedVideosAndMylistsCanReturnToFirstPage(t *testing.T) {
+	for _, target := range []string{home + "user/123/video?page=5", home + "mylist/456?page=5"} {
+		r := routeFor(target)
+		app := browser{navigation: []screenRoute{r}, closed: true}
+		view := ui.NewTester(app.draw, 640, 520)
+		if err := view.Click("最初のページ"); err != nil {
+			t.Fatal(err)
+		}
+		if got := app.navigation[app.index]; got.page != 0 || got.kind != r.kind || got.key != r.key || got.target != r.link {
+			t.Fatalf("jump from %s went to %+v", target, got)
+		}
+	}
 }

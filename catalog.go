@@ -37,6 +37,8 @@ const (
 	screenOwnLists
 	screenOwnList
 	screenVideo
+	screenUserSeries
+	screenSeries
 )
 
 type screenRoute struct {
@@ -111,6 +113,26 @@ func routeFor(raw string) screenRoute {
 			}
 			r.kind, r.page = screenList, page
 		}
+	case "シリーズ":
+		kind, key := screenSeries, r.key
+		if parts[0] == "user" {
+			if !numeric(parts[1], 9) {
+				return r
+			}
+			if len(parts) == 3 {
+				kind, key = screenUserSeries, parts[1]
+			}
+		}
+		if !numeric(key, 12) {
+			return r
+		}
+		u.RawQuery = input.RawQuery
+		page, ok := desktopListPage(u)
+		if !ok {
+			r.officialBrowse = true
+			return r
+		}
+		r.kind, r.key, r.page, r.target = kind, key, page, u.String()
 	}
 	return r
 }
@@ -157,7 +179,7 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 				return 0, false
 			}
 		case "sort":
-			if _, ok := findSearchSort(value); !ok || value == "" {
+			if _, ok := findSearchSort(value); !ok {
 				return 0, false
 			}
 		case "order":
@@ -173,7 +195,7 @@ func nativeSearchPage(u *url.URL) (int, bool) {
 
 func (r screenRoute) withPage(page int) screenRoute {
 	r.page = page
-	if r.kind == screenSearch || r.kind == screenUser || r.kind == screenList {
+	if r.kind == screenSearch || r.kind == screenUser || r.kind == screenList || r.kind == screenUserSeries || r.kind == screenSeries {
 		u, _ := url.Parse(r.target)
 		if r.kind == screenUser || r.kind == screenList {
 			u.Host = "www.nicovideo.jp"
@@ -203,7 +225,8 @@ func (r screenRoute) startTime() time.Duration {
 }
 
 type card struct {
-	link, title, summary, owner, thumbnail string
+	link, title, summary, owner, ownerName, thumbnail string
+	tags                                              []string
 }
 
 type catalogPage struct {
@@ -212,6 +235,8 @@ type catalogPage struct {
 	items, links           []card
 	description            []descriptionPart
 	tags                   []string
+	publisher              videoPublisher
+	emptyNotice            string
 	more                   bool
 }
 
@@ -235,6 +260,14 @@ func sessionEndpoint(u *url.URL) bool {
 	}
 	if u.Path == accountSearchPath || u.Path == accountStatusPath {
 		return true
+	}
+	if id, ok := strings.CutPrefix(u.Path, "/v2/series/"); ok && numeric(id, 12) {
+		return true
+	}
+	if user, ok := strings.CutPrefix(u.Path, "/v1/users/"); ok {
+		if id, ok := strings.CutSuffix(user, "/series"); ok && numeric(id, 9) {
+			return true
+		}
 	}
 	const base = "/v1/users/me/mylists"
 	id, ok := strings.CutPrefix(u.Path, base+"/")
@@ -281,13 +314,19 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 		if private && (res.StatusCode == 401 || res.StatusCode == 403 && path != accountStatusPath) {
 			return nil, errSignIn
 		}
-		return nil, fmt.Errorf("ニコニコから取得できませんでした（HTTP %d）", res.StatusCode)
+		return nil, catalogHTTPStatus(res.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, responseLimit+1))
 	if err != nil || len(data) > responseLimit {
 		return nil, errors.New("応答を読み取れませんでした")
 	}
 	return data, nil
+}
+
+type catalogHTTPStatus int
+
+func (s catalogHTTPStatus) Error() string {
+	return fmt.Sprintf("ニコニコから取得できませんでした（HTTP %d）", s)
 }
 
 func decodeJSON[T any](b []byte) (T, error) {
@@ -322,7 +361,7 @@ func searchParameters(r screenRoute) url.Values {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
-		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl"},
+		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId"},
 		"_sort":  {direction + sort.snapshotKey}, "_limit": {strconv.Itoa(searchPageSize)}, "_offset": {strconv.Itoa(r.page * searchPageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
@@ -351,6 +390,8 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	type row struct {
 		ContentID, Title, ThumbnailURL             string
 		LengthSeconds, ViewCounter, CommentCounter int
+		Tags                                       json.RawMessage
+		UserID, ChannelID                          json.RawMessage
 	}
 	result, err := decodeJSON[struct {
 		Meta struct{ Status, TotalCount int }
@@ -363,6 +404,11 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	for _, item := range result.Data {
 		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
+			v.tags = searchVideoTags(item.Tags)
+			v.owner = (publisherMetadata{ID: item.ChannelID}).publisher("channel").videos
+			if v.owner == "" {
+				v.owner = (publisherMetadata{ID: item.UserID}).publisher("user").videos
+			}
 			p.items = append(p.items, v)
 		}
 	}
@@ -373,7 +419,8 @@ type apiVideo struct {
 	ID, Title               string
 	Duration                int
 	Count                   struct{ View, Comment int }
-	Owner                   struct{ ID, Name, OwnerType string }
+	Owner                   publisherMetadata
+	Tag, Tags               json.RawMessage
 	Thumbnail               struct{ URL, MiddleURL, ListingURL string }
 	RequireSensitiveMasking bool
 }
@@ -392,8 +439,10 @@ func (v apiVideo) thumbnailURL() string {
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
 	x.thumbnail = v.thumbnailURL()
-	if numeric(v.Owner.ID, 9) && v.Owner.OwnerType == "user" {
-		x.owner = home + "user/" + v.Owner.ID + "/video"
+	p := v.Owner.publisher(v.Owner.OwnerType)
+	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
+	if len(x.tags) == 0 {
+		x.tags = searchVideoTags(v.Tag)
 	}
 	return x, ok
 }
@@ -521,8 +570,8 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 			v.ID = item.WatchID
 		}
 		if x, ok := v.card(); ok {
-			if r.kind == screenUser && p.title == title && v.Owner.Name != "" {
-				p.title = v.Owner.Name + " の投稿動画"
+			if r.kind == screenUser && p.title == title && x.ownerName != "" {
+				p.title = x.ownerName + " の投稿動画"
 			}
 			p.items = append(p.items, x)
 		}
@@ -551,6 +600,8 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 			Description  string `xml:"description"`
 			UserID       string `xml:"user_id"`
 			UserNickname string `xml:"user_nickname"`
+			ChannelID    string `xml:"ch_id"`
+			ChannelName  string `xml:"ch_name"`
 			Tags         []struct {
 				Domain string   `xml:"domain,attr"`
 				Items  []string `xml:"tag"`
@@ -573,8 +624,15 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 	}
 	p.summary, p.links, p.description = plainDescription(result.Thumb.Description)
 	if numeric(result.Thumb.UserID, 9) {
-		p.author = result.Thumb.UserNickname
+		p.publisher = publisherFor("user", result.Thumb.UserID, result.Thumb.UserNickname)
+		p.author = p.publisher.name
 		p.links = append([]card{{link: home + "user/" + result.Thumb.UserID + "/video", title: "投稿者の動画一覧"}, {link: home + "user/" + result.Thumb.UserID + "/mylist", title: "投稿者の公開マイリスト"}}, p.links...)
+	} else if result.Thumb.ChannelID != "" || result.Thumb.ChannelName != "" {
+		p.publisher = publisherFor("channel", result.Thumb.ChannelID, result.Thumb.ChannelName)
+		p.author = p.publisher.name
+		if p.publisher.videos != "" {
+			p.links = append([]card{{link: p.publisher.videos, title: "チャンネルの投稿動画"}}, p.links...)
+		}
 	}
 	return p, nil
 }
@@ -587,6 +645,8 @@ func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {
 		return c.list(ctx, r)
 	case screenVideo:
 		return c.video(ctx, r)
+	case screenUserSeries, screenSeries:
+		return c.series(ctx, r)
 	default:
 		return catalogPage{}, nil
 	}

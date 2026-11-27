@@ -3,8 +3,34 @@ package main
 import (
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 )
+
+func TestSearchSortPreferenceFallback(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "search-sort.json")
+	if loadSearchSort(path) != (searchSortPreference{}) {
+		t.Fatal("missing settings did not use the default sort")
+	}
+	for _, data := range []string{`{"sort":"unsupported","ascending":true}`, `{"player":"native"}`, `{"sort":"hotLikeAndMylist","ascending":true}`, `{"sort":5}`, `{broken`, strings.Repeat(" ", 4097)} {
+		if err := os.WriteFile(path, []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if loadSearchSort(path) != (searchSortPreference{}) {
+			t.Fatal("old or invalid settings did not use the default sort")
+		}
+	}
+	pref := searchSortPreference{Sort: "v", Ascending: true}
+	for _, suffix := range []string{"?sort=", "?sort=hot", "?sort=f&order=d", "?order=d"} {
+		route := routeFor(home + "search/fresh" + suffix)
+		if route.kind != screenSearch || pref.apply(route) != route {
+			t.Fatalf("explicit ordering was overwritten: %s", suffix)
+		}
+	}
+}
 
 func TestOfficialSearchOrdering(t *testing.T) {
 	for _, mode := range []string{"search", "tag"} {
@@ -69,15 +95,16 @@ func TestGuestSearchSnapshotFallbackKeepsSort(t *testing.T) {
 				return testResponse(503, ""), nil
 			}
 			q := r.URL.Query()
-			if !tc.snapshot || r.URL.Host != "snapshot.search.nicovideo.jp" ||
+			if !tc.snapshot || r.URL.Host != "snapshot.search.nicovideo.jp" || !slices.Contains(strings.Split(q.Get("fields"), ","), "tags") ||
 				q.Get("_sort") != "+likeCounter" || q.Get("_offset") != "32" || q.Get("targets") != "tagsExact" {
 				t.Fatalf("unexpected snapshot request: %s", r.URL)
 			}
-			return testResponse(200, `{"meta":{"status":200},"data":[{"contentId":"sm9","thumbnailUrl":"https://nicovideo.cdn.nimg.jp/thumbnails/9/9"}]}`), nil
+			return testResponse(200, `{"meta":{"status":200},"data":[{"contentId":"sm9","userId":123,"tags":"初音ミク 曲　名 初音ミク","thumbnailUrl":"https://nicovideo.cdn.nimg.jp/thumbnails/9/9"}]}`), nil
 		})
 		p, err := c.load(t.Context(), routeFor(home+"tag/kitty?page=2&"+tc.query))
 		if tc.snapshot {
-			if err != nil || calls != 2 || p.searchMode != "スナップショット検索" || len(p.items) != 1 || p.items[0].thumbnail == "" {
+			if err != nil || calls != 2 || p.searchMode != "スナップショット検索" || len(p.items) != 1 || p.items[0].thumbnail == "" ||
+				!slices.Equal(p.items[0].tags, []string{"初音ミク", "曲　名"}) || p.items[0].owner != home+"user/123/video" || p.items[0].ownerName != "" {
 				t.Fatalf("snapshot result %+v, %v, %d requests", p, err, calls)
 			}
 		} else if err == nil || calls != 1 {

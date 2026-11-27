@@ -25,10 +25,11 @@ type mediaTrack struct {
 	QualityLevel int
 }
 type watchData struct {
-	Video  struct{ ID, Title, Description string }
-	Tags   *struct{ Items []struct{ Name string } }
-	Client struct{ WatchTrackID string }
-	Media  struct {
+	Video          struct{ ID, Title, Description string }
+	Owner, Channel publisherMetadata
+	Tag, Tags      *struct{ Items []struct{ Name string } }
+	Client         struct{ WatchTrackID string }
+	Media          struct {
 		Domand struct {
 			Videos, Audios []mediaTrack
 			AccessRightKey string

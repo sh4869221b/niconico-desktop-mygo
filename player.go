@@ -185,6 +185,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			Content: ui.View(func(c *ui.Context) { b.drawPlayer(p, c) }),
 			Page:    mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 		})
+		_ = p.win.SetIcon(appIconPNG)
 		b.player = p
 		p.win.OnClosed(func() {
 			// MyGo destroys WebViews owned by a closed window.
