@@ -83,6 +83,13 @@ func (t *TextLayout) SelectionRanges(anchor, caret TextCaretPosition) []TextInpu
 // retain a copy of an editor document or install keyboard/editing behavior.
 func ShapeText(s string, font Font, width float32) *TextLayout { return shapeText(s, font, width, nil) }
 
+// MeasureText returns the extent in DIPs of ShapeText(s, font, width), without
+// constructing the caret and grapheme tables that an editable layout needs.
+func MeasureText(s string, font Font, width float32) (w, h float32) {
+	l := text.Shared().Shape(text.Params{Text: s, Style: font.style(), Width: width, KeepSpaces: true})
+	return l.Width, l.Height
+}
+
 // ShapeRichText shapes the existing display-only Span styles into retained
 // geometry, so an application-owned rich editor can render its own runs.
 func ShapeRichText(spans []Span, font Font, width float32) *TextLayout {

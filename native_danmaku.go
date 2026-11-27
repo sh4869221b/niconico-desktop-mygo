@@ -326,12 +326,12 @@ func (d *danmakuOverlay) measure(c danmakuCue) commentMeasure {
 	}
 	size := max(6, c.style.size*d.height/360)
 	font := ui.Font{Family: "Arial", Size: size, Weight: 700, Lang: "ja", LineHeight: 1.15}
-	width, height := ui.ShapeText(c.body, font, 0).Size()
+	width, height := ui.MeasureText(c.body, font, 0)
 	if key.fixed {
 		// Fixed comments should remain readable even when a line is wider than the picture.
 		if width > d.width-4 || height > d.height-4 {
 			font.Size *= max(0.15, min((d.width-4)/width, (d.height-4)/height))
-			width, height = ui.ShapeText(c.body, font, 0).Size()
+			width, height = ui.MeasureText(c.body, font, 0)
 		}
 		if strings.Contains(c.body, "\n") {
 			layout := ui.ShapeRichTextWith([]ui.Span{{Text: c.body}}, font, ui.TextShape{Width: width + 0.5, Align: ui.Center})

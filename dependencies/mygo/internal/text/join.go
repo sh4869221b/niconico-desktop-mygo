@@ -4,7 +4,6 @@ import (
 	"image"
 	"math"
 	"strconv"
-	"strings"
 )
 
 // JoinsGlyphs reports whether glyphs of a run whose edges share pixels
@@ -63,7 +62,15 @@ func (s *System) GlyphRun(f *Font, ids []uint32, xs []float32, scale float32, sh
 		return GlyphImage{}
 	}
 	// The glyphs, as placed alone, which the key names.
-	gs := make([]GlyphImage, len(ids))
+	// Overlapping groups are usually a pair. Keep their images and
+	// short cache keys on the stack when looking up the joined mask.
+	var small [4]GlyphImage
+	gs := small[:]
+	if len(ids) > len(gs) {
+		gs = make([]GlyphImage, len(ids))
+	} else {
+		gs = gs[:len(ids)]
+	}
 	for i, id := range ids {
 		gs[i] = s.Glyph(f, id, scale, xs[i], shade, opaque)
 	}
@@ -72,26 +79,28 @@ func (s *System) GlyphRun(f *Font, ids []uint32, xs []float32, scale float32, sh
 	shade = f.shadeFor(shade)
 	subpixel := opaque && s.subpixel
 	origin := math.Floor(float64(xs[0]))
-	var key strings.Builder
-	key.WriteString(strconv.FormatUint(uint64(uint32(scale*256+0.5)), 10))
-	key.WriteByte(byte('0' + shade))
+	var buf [64]byte
+	key := buf[:0]
+	key = strconv.AppendUint(key, uint64(uint32(scale*256+0.5)), 10)
+	key = append(key, byte('0'+shade))
 	if subpixel {
-		key.WriteByte('s')
+		key = append(key, 's')
 	}
 	for i, id := range ids {
 		q, _, carry := s.place(f, scale, subpixel, xs[i])
-		key.WriteByte(' ')
-		key.WriteString(strconv.FormatUint(uint64(id), 10))
-		key.WriteByte('@')
-		key.WriteString(strconv.Itoa(int(math.Floor(float64(xs[i])) - origin + float64(carry))))
-		key.WriteByte('+')
-		key.WriteString(strconv.Itoa(q))
+		key = append(key, ' ')
+		key = strconv.AppendUint(key, uint64(id), 10)
+		key = append(key, '@')
+		dx := int(math.Floor(float64(xs[i])) - origin + float64(carry))
+		key = strconv.AppendInt(key, int64(dx), 10)
+		key = append(key, '+')
+		key = strconv.AppendInt(key, int64(q), 10)
 	}
-	rk := runKey{f, key.String()}
-	if e, ok := s.runs[rk]; ok {
+	if e, ok := s.runs[runKey{f, string(key)}]; ok {
 		e.used = s.frame
 		return e.GlyphImage
 	}
+	rk := runKey{f, string(key)}
 	if _, out := s.outRuns[rk]; out {
 		return GlyphImage{}
 	}

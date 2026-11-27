@@ -222,7 +222,9 @@ func (p *Painter) glyphSpaceAt(x, y, size float32, moves bool) glyphSpace {
 // rasterized in gs: none, unless moves tells that inline transforms move
 // glyphs, where gs scales them.
 func (gs glyphSpace) inlineTransform(p *Painter, cluster int, moves bool) scene.Affine {
-	if gs.q != 1 && !moves {
+	// A plain, untransformed label has the same identity transform for
+	// every glyph, in both the fill and the stroke.
+	if (gs.q != 1 && !moves) || p.inline == nil || (p.inline.first == nil && !p.inline.world.Set) {
 		return scene.Affine{}
 	}
 	// In gs's pixels: as the inline element's transform in DIPs is in

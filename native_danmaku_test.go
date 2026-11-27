@@ -184,3 +184,16 @@ func TestDanmakuFirstFreeRun(t *testing.T) {
 		}
 	}
 }
+
+func TestDanmakuMeasureMatchesShapedText(t *testing.T) {
+	font := ui.Font{Family: "Arial", Size: 25.5, Weight: 700, Lang: "ja", LineHeight: 1.15}
+	for _, body := range []string{"", "  右  左　", "空行\n\n　字幕", "مرحبا 🧑🏽‍🚀 か\u3099"} {
+		for _, width := range []float32{0, 74.5} {
+			w, h := ui.MeasureText(body, font, width)
+			wantW, wantH := ui.ShapeText(body, font, width).Size()
+			if w != wantW || h != wantH {
+				t.Errorf("%q at %.1f: measured %vx%v, shaped %vx%v", body, width, w, h, wantW, wantH)
+			}
+		}
+	}
+}
