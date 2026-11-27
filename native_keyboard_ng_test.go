@@ -52,3 +52,16 @@ func TestKeyboardCanNGSelectedCommentAndFocusNext(t *testing.T) {
 		t.Fatal("unknown author can be blocked")
 	}
 }
+
+func TestNGFocusFindsNextRowWhenEarlierRowsShareAuthor(t *testing.T) {
+	a := commentAuthor{ID: "123"}
+	n := &nativePlayer{allComments: []timedComment{{author: a}, {author: a}, {author: commentAuthor{ID: "456"}}, {author: commentAuthor{ID: "789"}}}, selectedComment: 1}
+	n.applyCommentNG(nil)
+	n.commentList.Selected = &n.selectedComment
+	n.pendingNG = commentNGEdit{a, true}
+	b := &browser{commentNG: commentNG{path: filepath.Join(t.TempDir(), "ng.json")}}
+	b.applyPendingCommentNG(n)
+	if n.selectedComment != 0 || n.commentRows[n.selectedComment] != 2 {
+		t.Fatalf("skipped next surviving row: %v, selected %d", n.commentRows, n.selectedComment)
+	}
+}

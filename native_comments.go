@@ -65,10 +65,14 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 		n.ngNotice = "NG設定を保存できませんでした。"
 		return
 	}
-	selected := n.selectedComment
+	selected := 0
+	if n.selectedComment >= 0 && n.selectedComment < len(n.commentRows) {
+		selected = n.commentRows[n.selectedComment]
+	}
 	n.applyCommentNG(b.commentNG.blocked)
 	if edit.block {
-		n.commentList.Choose(min(selected, len(n.commentRows)-1))
+		next := sort.SearchInts(n.commentRows, selected)
+		n.commentList.Choose(min(next, len(n.commentRows)-1))
 		n.focusCommentList = true
 	}
 	if edit.block {
