@@ -258,38 +258,61 @@ func (b *browser) drawNative(c *ui.Context) {
 				}
 			})
 		}
+		// Short pages already fit in or near a viewport. Virtualize the
+		// longer pages, keeping the description and its links scrollable.
+		if len(p.items) > pageSize {
+			introRows := 0
+			if p.author != "" || p.summary != "" || len(p.links) > 0 {
+				introRows = 1
+			}
+			ui.List(scope, nil, len(p.items)+introRows, func(i int) {
+				if i < introRows {
+					ui.Column(scope).FillWidth().Gap(8).Children(func() { b.drawCatalogIntro(scope, p) })
+					return
+				}
+				b.drawCatalogItem(scope, r.kind, p.items[i-introRows])
+			}).Grow(1).MinHeight(0).Gap(8)
+			return
+		}
 		ui.Scroll(scope).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(scope).FillWidth().Gap(8).Children(func() {
-				if p.author != "" {
-					ui.Text(scope, p.author).TextColor(t.TextMuted).Wrap()
-				}
-				if p.summary != "" {
-					ui.Text(scope, p.summary).Wrap()
-				}
-				for i, link := range p.links {
-					row := scope.Key(fmt.Sprintf("link-%d", i))
-					if ui.Button(row, link.title).Clicked() {
-						b.navigate(link.link)
-					}
-				}
+				b.drawCatalogIntro(scope, p)
 				if len(p.items) == 0 && r.kind != screenVideo {
 					ui.Text(scope, "表示する項目はありません。").TextColor(t.TextMuted)
 				}
 				for i, item := range p.items {
-					row := scope.Key(fmt.Sprintf("item-%d", i))
-					ui.Row(row).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
-						if ui.Button(row, item.title).Tooltip(item.title).Grow(1).MinWidth(0).Clicked() {
-							b.navigate(item.link)
-						}
-						if item.owner != "" && r.kind != screenUser && ui.Button(row, "投稿者").Clicked() {
-							b.navigate(item.owner)
-						}
-						if item.summary != "" {
-							ui.Text(row, strings.TrimSpace(item.summary)).TextColor(t.TextMuted)
-						}
-					})
+					b.drawCatalogItem(scope.Key(i), r.kind, item)
 				}
 			})
 		})
+	})
+}
+
+func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
+	if p.author != "" {
+		ui.Text(scope, p.author).TextColor(scope.Theme().TextMuted).Wrap()
+	}
+	if p.summary != "" {
+		ui.Text(scope, p.summary).Wrap()
+	}
+	for i, link := range p.links {
+		row := scope.Key(fmt.Sprintf("link-%d", i))
+		if ui.Button(row, link.title).Clicked() {
+			b.navigate(link.link)
+		}
+	}
+}
+
+func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card) {
+	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(8).Children(func() {
+		if ui.Button(scope, item.title).Tooltip(item.title).Grow(1).MinWidth(0).Clicked() {
+			b.navigate(item.link)
+		}
+		if item.owner != "" && kind != screenUser && ui.Button(scope, "投稿者").Clicked() {
+			b.navigate(item.owner)
+		}
+		if item.summary != "" {
+			ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(scope.Theme().TextMuted)
+		}
 	})
 }
