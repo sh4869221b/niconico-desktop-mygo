@@ -227,6 +227,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	external                                          bool
 }
 
 type catalogPage struct {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"golang.org/x/net/idna"
+	"net"
 	"net/url"
 	"regexp"
 	"strings"
@@ -42,6 +44,7 @@ func descriptionLink(raw string) (card, string) {
 		if from := u.Query().Get("from"); from != "" {
 			link += "?" + url.Values{"from": {from}}.Encode()
 		}
+	case (kind == "タグ検索" || kind == "キーワード検索") && (r.kind == screenSearch || r.officialBrowse):
 	case kind == "マイリスト" && r.browsesInMain():
 	case kind == "ユーザー" && r.browsesInMain():
 	default:
@@ -134,6 +137,11 @@ func plainDescription(value string) (string, []card, []descriptionPart) {
 				for _, attr := range t.Attr {
 					if attr.Key == "href" {
 						anchor = add(attr.Val)
+						if anchor.link == "" {
+							if target := descriptionExternalURL(attr.Val); target != "" {
+								anchor = card{link: target, title: target, external: true}
+							}
+						}
 					}
 				}
 			}
@@ -181,9 +189,46 @@ func (b *browser) drawDescription(c *ui.Context, parts []descriptionPart) {
 			}
 			if part.link.link == "" {
 				ui.Text(c, part.text)
+			} else if part.link.external {
+				ui.Text(c, part.text+" （外部: "+part.link.link+"）")
+				if ui.Link(c.Key(i), " [外部URLをコピー]", "").Label("外部URLをコピー: " + part.link.link).Clicked() {
+					c.WriteClipboardThen(part.link.link, func(err error) {
+						if err != nil {
+							b.status = "クリップボードにコピーできませんでした。"
+						} else {
+							b.status = "外部URLをコピーしました。"
+						}
+						c.Invalidate()
+					})
+				}
 			} else if ui.Link(c.Key(i), part.text, "").Label(part.link.title).Clicked() {
 				b.followDescription(part.link.link)
 			}
 		}
 	})
+}
+
+// External destinations are displayed and copied, never sent through the app's session.
+func descriptionExternalURL(raw string) string {
+	if len(raw) > 8192 || strings.Contains(raw, "\\") || strings.ContainsFunc(raw, func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Opaque != "" || u.User != nil || u.Hostname() == "" || u.Scheme != "https" && u.Scheme != "http" {
+		return ""
+	}
+	host := u.Hostname()
+	if net.ParseIP(host) == nil {
+		host, err = idna.Lookup.ToASCII(host)
+		if err != nil {
+			return ""
+		}
+	}
+	if port := u.Port(); port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	u.Host = host
+	return u.String()
 }
