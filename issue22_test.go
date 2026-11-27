@@ -31,3 +31,17 @@ func TestFillPinTitle(t *testing.T) {
 		}
 	}
 }
+
+func TestPinBeforeAndAfterMetadata(t *testing.T) {
+	r := routeFor(home + "watch/sm9")
+	b := browser{navigation: []screenRoute{r}, libraryPath: filepath.Join(t.TempDir(), "library.json")}
+	b.pinCurrent()
+	if b.data.Pins[0].Title != r.link {
+		t.Fatal("expected URL placeholder")
+	}
+	b.result.title = "作品名"
+	b.pinCurrent()
+	if len(b.data.Pins) != 1 || b.data.Pins[0].Title != "作品名" {
+		t.Fatal(b.data.Pins)
+	}
+}
