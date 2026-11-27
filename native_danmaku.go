@@ -290,7 +290,8 @@ func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue,
 	// includes both sides of the outline, so double the old outward offset.
 	stroke := 2 * max(1, r.H/280)
 	ui.Box(ctx).Absolute().Left(r.X).Top(r.Y).Size(r.W, r.H).Clip().IgnoreInput(true).AccessHidden(true).Children(func() {
-		for _, item := range d.active {
+		for i := range d.active {
+			item := &d.active[i]
 			x := (r.W - item.width) / 2
 			if item.style.position == scrollComment {
 				x = item.x(ms, r.W)
@@ -304,7 +305,9 @@ func (d *danmakuOverlay) draw(ctx *ui.Context, r ui.Rect, comments []danmakuCue,
 			if rgb == 0 {
 				border = ui.RGB(255, 255, 255)
 			}
-			label := ui.Text(ctx, item.body).Absolute().Left(x).Top(item.y).Width(item.width+0.5).
+			// Reuse the box measured for lane placement so moving the label
+			// does not ask layout for its natural height again.
+			label := ui.Text(ctx, item.body).Absolute().Left(x).Top(item.y).Size(item.width+0.5, item.height).
 				Font("Arial").FontSize(item.fontSize).FontWeight(700).Lang("ja").LineHeight(1.15).
 				NoWrap().TextColor(color).TextStroke(stroke, border).IgnoreInput(true)
 			if item.style.position != scrollComment {
