@@ -255,6 +255,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					b.saveNativeDisplay()
 					n.follow.positioned = false
 				}
+				p.drawSharing(c, nil)
 				if n.loadingStream {
 					label := "一時停止"
 					if n.pauseRequested {
