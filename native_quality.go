@@ -76,7 +76,7 @@ func (s *nativeQualityState) apply(n *nativePlayer) {
 func (b *browser) captureNativeQuality(n *nativePlayer, route screenRoute) *nativeQualityState {
 	state := &nativeQualityState{at: route.startTime(), muted: b.nativeMuted, volume: b.nativeVolume / 100.0}
 	if n.qualityRestore != nil {
-		*state = *n.qualityRestore
+		state.at = n.qualityRestore.at
 	}
 	state.paused = n.pauseRequested
 	state.showComments, state.hideCommentPanel = n.showComments, n.hideCommentPanel

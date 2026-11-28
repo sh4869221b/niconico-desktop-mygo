@@ -90,3 +90,16 @@ func TestQualityChangeCapturesIndependentPlaybackState(t *testing.T) {
 		t.Fatal("quality change reset the active comment display")
 	}
 }
+
+func TestQualityRetryUsesAudioChangesMadeSinceThePreviousSwitch(t *testing.T) {
+	b := &browser{nativeVolume: 23, nativeMuted: true}
+	n := &nativePlayer{
+		qualityRestore: &nativeQualityState{at: 10 * time.Second, volume: 0.8, muted: false},
+		retryAt:        25 * time.Second,
+		retryPaused:    true,
+	}
+	state := b.captureNativeQuality(n, routeFor(home+"watch/sm9?from=3"))
+	if state.volume != 0.23 || !state.muted || state.at != 25*time.Second || !state.paused {
+		t.Fatalf("retry used an earlier quality switch's preferences: %+v", state)
+	}
+}
