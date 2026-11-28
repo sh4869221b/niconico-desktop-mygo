@@ -115,6 +115,10 @@ type danmakuCue struct {
 func makeDanmakuCues(comments []timedComment) []danmakuCue {
 	cues := make([]danmakuCue, 0, len(comments))
 	for _, c := range comments {
+		c.Body = cleanDanmakuText(c.Body)
+		if c.Body == "" {
+			continue
+		}
 		style := parseCommentStyle(c.Commands)
 		start, lifetime := c.VposMs, fixedLifetime
 		if style.position == scrollComment {
