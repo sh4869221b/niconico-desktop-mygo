@@ -278,14 +278,27 @@ func (b *browser) current() string {
 	if b.index < 0 {
 		return ""
 	}
-	return b.navigation[b.index].link
+	return b.navigation[b.index].target
 }
 
 func (b *browser) currentTitle() string {
 	if b.official {
 		return b.title
 	}
-	return b.result.title
+	title := b.result.title
+	if b.index >= 0 && b.navigation[b.index].kind == screenSearch && title != "" {
+		r := b.navigation[b.index]
+		sort, ascending := r.searchSort()
+		order := "降順"
+		if ascending {
+			order = "昇順"
+		}
+		if sort.snapshotKey == "" {
+			order = "指定順"
+		}
+		title += fmt.Sprintf("（%s・%s / %dページ）", sort.label, order, r.page+1)
+	}
+	return title
 }
 
 func (b *browser) persist() bool {
@@ -533,7 +546,7 @@ func (b *browser) sidebar(c *ui.Context) {
 					row := c.Key(item.URL)
 					ui.Row(row).Gap(4).AlignItems(ui.Center).Children(func() {
 						if ui.Button(row, "["+item.Kind+"] "+item.Title).Tooltip(item.Title).Grow(1).MinWidth(0).Clicked() {
-							b.navigate(item.URL)
+							b.navigate(item.openURL())
 						}
 						if ui.Button(row, "×").Label("削除").Clicked() {
 							b.remove(item)
