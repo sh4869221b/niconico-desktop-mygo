@@ -212,6 +212,15 @@ func (p *VideoPlayer) Pause() {
 	p.paused = true
 }
 
+// Paused reports the requested pause state. Ending, decoder failures, and
+// pauses imposed by visibility do not change the user's play/pause intent.
+func (p *VideoPlayer) Paused() bool {
+	if p.eng != nil {
+		return p.eng.paused
+	}
+	return p.paused
+}
+
 // Playing reports whether the video plays: neither paused nor ended. It
 // plays while out of sight too, though it does not move on then.
 func (p *VideoPlayer) Playing() bool {
@@ -310,6 +319,24 @@ func (p *VideoPlayer) Position() time.Duration {
 		}
 	}
 	return p.curAt + min(max(pos-(p.end-p.curDur), 0), p.curDur)
+}
+
+// ConfirmedPosition reports the playback time suitable for a resume point.
+// It is unavailable while the player is preparing or an asynchronous seek
+// has yet to land.
+func (p *VideoPlayer) ConfirmedPosition() (time.Duration, bool) {
+	if p.closed || p.Preparing() || !p.Ready() || p.Err() != nil {
+		return 0, false
+	}
+	if p.eng != nil {
+		if p.eng.closed {
+			return 0, false
+		}
+		if e, ok := p.eng.e.(interface{ ConfirmedPosition() (time.Duration, bool) }); ok {
+			return e.ConfirmedPosition()
+		}
+	}
+	return p.Position(), true
 }
 
 // Seek shows the video at d, from its start, and goes on playing from

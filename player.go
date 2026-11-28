@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,7 +20,17 @@ type playerWindow struct {
 	native                 *nativePlayer
 	target, title, status  string
 	commentLanguageWarning bool
+	attachingWeb           bool
+	failedWebTarget        string
+	replaceFailedWebView   bool
 	historySuppressed      map[string]bool
+	lastHistoryWrite       time.Time
+	lastHistoryCompleted   bool
+	saveHistory            func(bool)
+	historyVisitURL        string
+	historyVisitAt         time.Time
+	historyTarget          string // saved watch URL before applying a generated resume position
+	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
 	playedWatch            screenRoute
@@ -32,6 +43,8 @@ type playerWindow struct {
 
 func (p *playerWindow) resumeHistory(video string) {
 	delete(p.historySuppressed, video)
+	p.historyVisitURL = ""
+	p.historyVisitAt, p.lastHistoryWrite = time.Time{}, time.Time{}
 }
 
 func (p *playerWindow) visitWebVideo(video string) {
@@ -140,7 +153,33 @@ func (d *playerDocument) acceptTitle(revision uint64, video, title string) bool 
 
 func (b *browser) openPlayer(raw string) { b.openPlayerMode(raw, b.playMode) }
 
+type playbackPage interface {
+	IsLoading() bool
+	URL() string
+}
+
+// A bare watch link is a request to bring the existing video forward. Even
+// from=0 is an explicit seek request and must take the normal loading path.
+func (p *playerWindow) canFocusPlayback(route screenRoute, mode playbackMode, page playbackPage) bool {
+	if p.mode != mode || route.kind != screenVideo {
+		return false
+	}
+	u, _ := url.Parse(route.target)
+	if u.Query().Has("from") {
+		return false
+	}
+	if mode == nativePlayback {
+		return p.native != nil && (p.native.loadingStream || p.native.stream != nil) && routeFor(p.target).link == route.link
+	}
+	return page != nil && p.failedWebTarget == "" && !p.replaceFailedWebView && p.document.loaded && !p.document.loading &&
+		!page.IsLoading() && routeFor(page.URL()).link == route.link
+}
+
 func (b *browser) openPlayerMode(raw string, mode playbackMode) {
+	b.openPlayerWithHistoryTarget(raw, mode, "")
+}
+
+func (b *browser) openPlayerWithHistoryTarget(raw string, mode playbackMode, historyTarget string) {
 	if mode != nativePlayback {
 		mode = webPlayback
 	}
@@ -156,12 +195,33 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 		if b.closed || b.playbackRequest != request {
 			return
 		}
+		if p := b.player; p != nil {
+			var page playbackPage
+			if mode == webPlayback && p.view != nil {
+				page = p.view.Page()
+			}
+			if p.canFocusPlayback(route, mode, page) {
+				p.win.Show()
+				p.win.Focus()
+				return
+			}
+		}
+		var restore *webPlaybackRestore
+		if p := b.player; p != nil && p.mode == nativePlayback && mode == webPlayback {
+			restore = p.nativeWebRestore(route, time.Now())
+		}
 		if p := b.player; p != nil && p.mode != mode {
+			b.flushPlayerProgress(p)
+			if historyTarget == "" && raw == p.target {
+				historyTarget = p.historyTarget
+			}
 			b.player = nil
 			p.win.Close()
 		}
 		if p := b.player; p != nil {
+			b.flushPlayerProgress(p)
 			p.resumeHistory(route.link)
+			p.historyTarget = historyTarget
 			if p.mode == nativePlayback {
 				b.loadNativePlayer(p, route)
 				p.win.Show()
@@ -171,22 +231,25 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			p.visitWebVideo(route.link)
 			p.restoring = nil
 			p.target = route.target
-			if p.view != nil {
-				p.load(route.target)
-			}
+			b.startWebPlayer(p)
 			p.win.Show()
 			p.win.Focus()
 			return
 		}
-		p := &playerWindow{mode: mode, target: route.target, webVideo: route.link, status: "再生を準備しています…"}
+		p := &playerWindow{mode: mode, target: route.target, historyTarget: historyTarget, webVideo: route.link, status: "再生を準備しています…"}
+		if restore != nil {
+			p.restoring, p.restoreToken, p.target = restore, restore.token, restore.target
+		}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
-			Title: appName + " · プレーヤー",
+			StateKey: "player", Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
 			Content: ui.View(func(c *ui.Context) { b.drawPlayer(p, c) }),
 			Page:    mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 		})
 		_ = p.win.SetIcon(appIconPNG)
 		b.player = p
+		p.saveHistory = func(force bool) { b.recordPlaybackProgress(p, time.Now(), force) }
+		p.win.OnClose(func(*mygo.CloseEvent) { b.flushPlayerProgress(p) })
 		p.win.OnClosed(func() {
 			// MyGo destroys WebViews owned by a closed window.
 			if b.player == p {
@@ -204,30 +267,99 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 	})
 }
 
+func (b *browser) ownsWebPlayer(p *playerWindow) bool {
+	return b.player == p && !b.closed && p.mode == webPlayback
+}
+
+func (b *browser) startWebPlayer(p *playerWindow) {
+	if p.attachingWeb {
+		return
+	}
+	if p.replaceFailedWebView {
+		p.discardWebView()
+	}
+	if p.view == nil {
+		b.attachPlayer(p)
+		return
+	}
+	p.load(p.target)
+}
+
+func (p *playerWindow) discardWebView() {
+	view := p.view
+	p.view, p.restoring, p.returningToVideo = nil, nil, false
+	p.replaceFailedWebView = false
+	p.document.resetTitleLookup()
+	p.document = playerDocument{revision: p.document.revision}
+	p.playedWatch, p.playedVideo, p.playedPosition = screenRoute{}, "", nil
+	if view != nil {
+		view.Destroy()
+	}
+}
+
+func (p *playerWindow) failWebPlayer(raw, message string, replaceView bool) {
+	if routeFor(raw).kind != screenVideo {
+		raw = p.target
+	}
+	p.failedWebTarget, p.replaceFailedWebView, p.status = raw, replaceView, message
+	p.win.Invalidate()
+}
+
+func (b *browser) recoverPlayer(p *playerWindow, mode playbackMode) {
+	// Platform WebView calls can enter the UI loop. Queue them outside draw.
+	go mygo.RunOnMain(func() {
+		if !b.ownsWebPlayer(p) || p.attachingWeb || p.failedWebTarget == "" {
+			return
+		}
+		route := routeFor(p.failedWebTarget)
+		if route.kind != screenVideo {
+			return
+		}
+		p.target = route.target
+		p.visitWebVideo(route.link)
+		if mode == nativePlayback {
+			p.failedWebTarget = ""
+			p.discardWebView()
+			p.mode = nativePlayback
+			b.loadNativePlayer(p, route)
+		} else {
+			b.startWebPlayer(p)
+		}
+	})
+}
+
 func (b *browser) attachPlayer(p *playerWindow) {
-	active := func() bool { return !b.closed && b.player == p }
-	if !active() {
+	b.attachPlayerUsing(p, p.win.NewWebView)
+}
+
+func (b *browser) attachPlayerUsing(p *playerWindow, create func(mygo.WebViewOptions) (*mygo.WebView, error)) {
+	if !b.ownsWebPlayer(p) || p.attachingWeb || p.view != nil {
 		return
 	}
-	p.commentLanguageWarning = setJapaneseComments(b.session.Cookies.Set, time.Now()) != nil
-	if !active() {
+	p.attachingWeb = true
+	defer func() { p.attachingWeb = false }()
+	p.failedWebTarget, p.status = "", "再生を準備しています…"
+	p.win.Invalidate()
+	if b.session != nil {
+		p.commentLanguageWarning = setJapaneseComments(b.session.Cookies.Set, time.Now()) != nil
+	}
+	if !b.ownsWebPlayer(p) {
 		return
 	}
-	view, err := p.win.NewWebView(mygo.WebViewOptions{Page: mygo.PageOptions{
+	view, err := create(mygo.WebViewOptions{Page: mygo.PageOptions{
 		Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session, PreloadScript: webPlayerPreload,
 	}})
-	if !active() {
+	if !b.ownsWebPlayer(p) || err != nil {
 		if view != nil {
 			view.Destroy()
 		}
-		return
-	}
-	if err != nil {
-		p.status = "公式プレーヤーを起動できません。WebView2 Runtimeを確認してください。"
-		p.win.Invalidate()
+		if b.ownsWebPlayer(p) {
+			p.failWebPlayer(p.target, "公式プレーヤーを起動できません。WebView2 Runtimeを確認してください。", false)
+		}
 		return
 	}
 	p.view = view
+	active := func() bool { return b.ownsWebPlayer(p) && p.view == view && !p.replaceFailedWebView }
 	page := view.Page()
 	routeLink := func(dest screenRoute) bool {
 		if dest.kind == screenVideo && dest.link == p.webVideo {
@@ -236,6 +368,9 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		return b.browseFromPlayer(p, dest, false)
 	}
 	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
+		if active() && p.saveHistory != nil {
+			p.saveHistory(true)
+		}
 		dest := routeFor(e.URL)
 		if !active() || allowedURL(e.URL) == nil || b.handoffWatch(p, dest) ||
 			(e.UserInitiated || dest.isSearchPage()) && routeLink(dest) {
@@ -267,7 +402,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 				p.restoring = nil
 			}
 			p.document.begin()
-			p.status = ""
+			p.failedWebTarget, p.status = "", ""
 			p.win.Invalidate()
 		}
 	})
@@ -286,17 +421,16 @@ func (b *browser) attachPlayer(p *playerWindow) {
 			return
 		}
 		p.finishWebLoad(page.URL())
-		p.status = ""
+		p.failedWebTarget, p.status = "", ""
 		p.win.Invalidate()
 	})
-	page.OnDidFailLoad(func(_ *mygo.LoadError) {
+	page.OnDidFailLoad(func(load *mygo.LoadError) {
 		if !active() {
 			return
 		}
 		p.document.stopLoad()
 		p.restoring = nil
-		p.status = "動画ページを開けませんでした。"
-		p.win.Invalidate()
+		p.failWebPlayer(load.URL, "動画ページを開けませんでした。", false)
 	})
 	page.OnDidCancelLoad(func() {
 		if active() {
@@ -312,8 +446,7 @@ func (b *browser) attachPlayer(p *playerWindow) {
 		p.document.stopLoad()
 		p.restoring = nil
 		p.document.resetTitleLookup()
-		p.status = "プレーヤーが終了しました。ウィンドウを閉じて再度開いてください。"
-		p.win.Invalidate()
+		p.failWebPlayer(page.URL(), "公式プレーヤーの表示が終了しました。", true)
 	})
 	p.load(p.target)
 	watchWebSource(active, func() { b.observePlayerPage(p, page, active) })
@@ -416,6 +549,7 @@ func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active fun
 	if route.kind == screenVideo {
 		p.applyWebRestore(page, route)
 		p.captureWebPosition(page)
+		b.recordPlaybackProgress(p, time.Now(), false)
 		if !active() || d.loading || page.URL() != raw {
 			return
 		}
@@ -481,25 +615,43 @@ func (p *playerWindow) setWebTitle() {
 }
 
 func (p *playerWindow) load(target string) {
+	if p.saveHistory != nil {
+		p.saveHistory(true)
+	}
 	if p.view == nil || allowedURL(target) == nil {
 		return
 	}
-	p.status = ""
+	p.failedWebTarget, p.status = "", ""
 	if err := p.view.Page().LoadURL(target); err != nil {
 		p.restoring = nil
-		p.status = "動画ページを開けませんでした。"
+		p.failWebPlayer(target, "動画ページを開けませんでした。", false)
 	}
 	p.win.Invalidate()
 }
 
-func (p *playerWindow) draw(c *ui.Context) {
+func (p *playerWindow) draw(c *ui.Context, recover func(playbackMode)) {
 	ui.Column(c).Fill().Background(c.Theme().Surface).Children(func() {
-		if p.view != nil {
+		if p.view != nil && !p.replaceFailedWebView {
 			ui.WebView(c, p.view).Grow(1).FillWidth().MinHeight(0)
 		}
 		if p.status != "" {
 			ui.Text(c, p.status).Wrap()
 		}
+		if p.failedWebTarget != "" {
+			ui.Row(c).Gap(8).Padding(6, 12).Wrap().Children(func() {
+				if ui.PrimaryButton(c, "公式プレーヤーを再試行").Clicked() {
+					recover(webPlayback)
+				}
+				if ui.Button(c, "この動画を独自プレーヤーで開く").Clicked() {
+					recover(nativePlayback)
+				}
+			})
+		}
+		var page playbackPage
+		if p.view != nil {
+			page = p.view.Page()
+		}
+		p.drawSharing(c, page)
 		if p.commentLanguageWarning {
 			ui.Text(c, commentLanguageWarning).TextColor(c.Theme().TextMuted).Padding(5, 12).Wrap()
 		}

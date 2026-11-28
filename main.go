@@ -21,25 +21,53 @@ const appName = "Niconico Desktop MyGo"
 var version = "dev"
 
 type browser struct {
-	win                          *mygo.Window
-	web                          *mygo.WebView
-	field, source, title, status string
-	libraryPath, storeWarning    string
-	commentLanguageWarning       bool
-	data                         library
-	history, loaded, closed      bool
-	showLibrary                  bool
+	win                           *mygo.Window
+	web                           *mygo.WebView
+	source, title, status         string
+	searchInput                   searchInput
+	libraryPath, storeWarning     string
+	commentLanguageWarning        bool
+	data                          library
+	pendingLibraryEdits           []func(*library) bool
+	history, loaded, closed       bool
+	showLibrary                   bool
+	libraryQuery, libraryKind     string
+	libraryExpanded, focusContent bool
+	undoRemoval                   *libraryRemoval
+
+	historySettingsPath, historyPeriod, historyNotice string
+	historySettingsErr                                error
+	historyDisabled                                   bool
+	historySettingsChecked                            time.Time
+	historyErasePending                               []entry
+
+	storageOpen, storageBusy, playbackBlocked bool
+	storageFiles                              []profileFile
+	storageNotice, ngReadWarning              string
+
+	layoutPath                   string
+	layoutLoadErr                error
+	focusSearch                  bool
+	closeHelpPath                string
+	closeHelpAcknowledged        bool
 	session                      *mygo.Session
 	loginState                   loginState
+	loginBusy                    bool
 	loginCheck                   uint64
 	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
+	officialLoading              bool
+	loginHelp                    bool
 	officialTarget               string
+	officialTitleSource          string
 	catalog                      catalog
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
+	nativeVisits                 []*catalogVisit
 	index                        int
+	userNames                    map[string]string
 	result                       catalogPage
+	knownVideoDetails            map[string]videoDetails
 	resultErr                    error
 	busy                         bool
 	cancel                       context.CancelFunc
@@ -50,7 +78,18 @@ type browser struct {
 	showPlaybackSettings         bool
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
+	settingsNG                   nativePlayer
 	nativeVolume                 float64
+	statusAnnouncements          []string
+	announcedResult              string
+	announcedResultEpoch         uint64
+	nativeDisplay                nativeDisplayPreferences
+	nativeDisplayNotice          string
+	nativeMuted                  bool
+	nativeAudioNotice            string
+
+	searchFocus, libraryFocus, contentFocus ui.Handle
+	libraryRegion, contentRegion            ui.Handle
 
 	searchSortPath, searchSortNotice string
 	searchDefault                    searchSortPreference
@@ -75,24 +114,45 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.historySettingsPath = filepath.Join(dir, "NiconicoDesktopMyGo", "history.json")
+		b.historyDisabled, b.historySettingsErr = loadHistoryRecording(b.historySettingsPath)
+		if prefs, err := loadNativeDisplay(b.nativeDisplayPath()); err == nil {
+			b.nativeDisplay = prefs
+		} else {
+			b.nativeDisplayNotice = "表示設定を読み込めませんでした。"
+		}
+		b.layoutPath = filepath.Join(dir, "NiconicoDesktopMyGo", "layout.json")
+		b.showLibrary, b.layoutLoadErr = loadSidebarVisibility(b.layoutPath)
+		if audio, err := loadNativeAudio(b.nativeAudioPath()); err == nil {
+			b.nativeVolume, b.nativeMuted = audio.Volume, audio.Muted
+		} else {
+			b.nativeAudioNotice = "音量・ミュート設定を読み込めませんでした。"
+		}
+		b.closeHelpPath = filepath.Join(dir, "NiconicoDesktopMyGo", "close-help.json")
+		b.closeHelpAcknowledged = loadCloseHelp(b.closeHelpPath)
 		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
 		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
 			b.playMode = mode
 		} else {
 			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
+			b.playbackBlocked = true
 		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
-		b.commentNG, _ = loadCommentNG(filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json"))
+		ngPath := filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json")
+		b.commentNG, err = loadCommentNG(ngPath)
+		if err != nil {
+			b.ngReadWarning = "NG設定を読み込めません。元ファイルを保護しています: " + ngPath
+		}
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
-			b.storeWarning = "既存の保存ファイルを読み込めません。上書きは行いません。"
+			b.storeWarning = "保存ファイルを読み込めません。上書きは行いません: " + b.libraryPath
 		}
 	} else {
 		b.storeWarning = "保存先を取得できません。"
 	}
 	b.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
+		StateKey: "main", Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
 	_ = b.win.SetIcon(appIconPNG)
@@ -140,7 +200,8 @@ func (b *browser) attachOfficial() {
 		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session},
 	})
 	if err != nil {
-		b.status = "WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。"
+		b.officialLoading = false
+		b.reportStatus("WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。")
 		b.win.Invalidate()
 		return
 	}
@@ -158,7 +219,12 @@ func (b *browser) attachOfficial() {
 		}
 		if allowedURL(e.URL) == nil {
 			e.PreventDefault()
-			b.status = "ニコニコ以外への移動をブロックしました。"
+			message := "ニコニコ以外への移動をブロックしました。"
+			if b.officialTarget == login {
+				message += "外部事業者のログインは利用できません。"
+				b.loginHelp = true
+			}
+			b.reportStatus(message)
 		} else if b.playOfficialLink(view, e.URL, false) {
 			e.PreventDefault()
 		} else {
@@ -179,12 +245,17 @@ func (b *browser) attachOfficial() {
 			// Do not re-enter the WebView2 callback to navigate.
 			go mygo.RunOnMain(func() {
 				if active() {
+					b.beginOfficialLoading()
 					b.loadOfficial(target)
 				}
 			})
 		} else {
-			b.status = "アプリ外の新規ウィンドウは開きません。"
-			b.win.Invalidate()
+			message := "アプリ外の新規ウィンドウは開きません。"
+			if b.officialTarget == login {
+				message += "ニコニコのログイン方法を選んでください。"
+				b.loginHelp = true
+			}
+			b.reportStatus(message)
 		}
 		return nil
 	})
@@ -201,7 +272,10 @@ func (b *browser) attachOfficial() {
 		if !active() {
 			return
 		}
-		b.title = e.Title
+		b.title, b.officialTitleSource = e.Title, p.URL()
+		if !p.IsLoading() {
+			b.updateOfficialPinTitle()
+		}
 		b.win.Invalidate()
 	})
 	p.OnDidFinishLoad(func() {
@@ -212,11 +286,13 @@ func (b *browser) attachOfficial() {
 		if b.playOfficialLink(view, raw, true) {
 			return
 		}
-		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.finishOfficialPage(raw)
+		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
-		b.status = "ニコニコ公式ページ"
-		if !b.loaded {
-			b.status = "対応するページを開いてください。"
+		if b.loaded {
+			b.reportStatus("ニコニコ公式ページ")
+		} else {
+			b.reportStatus("対応するページを開いてください。")
 		}
 		b.win.Invalidate()
 	})
@@ -225,7 +301,8 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.loaded = false
-		b.status = "ページを読み込めませんでした。接続を確認してください。"
+		b.officialLoading = false
+		b.reportStatus("ページを読み込めませんでした。接続を確認してください。")
 		b.win.Invalidate()
 	})
 	p.OnRenderProcessGone(func(_ string) {
@@ -233,7 +310,8 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.loaded = false
-		b.status = "表示が終了しました。「更新」で再読み込みできます。"
+		b.officialLoading = false
+		b.reportStatus("表示が終了しました。「更新」で再読み込みできます。")
 		b.win.Invalidate()
 	})
 	b.loadOfficial(b.officialTarget)
@@ -242,15 +320,24 @@ func (b *browser) attachOfficial() {
 		raw := p.URL()
 		if !b.playOfficialLink(view, raw, true) && b.loaded && raw != b.source {
 			b.source = raw
+			b.showSearchRoute(routeFor(raw))
 			b.win.Invalidate()
 		}
 	})
 }
 
+func (b *browser) beginOfficialLoading() {
+	b.officialLoading = false
+	b.loading()
+}
+
 func (b *browser) loading() {
 	b.loaded = false
-	b.status = "読み込み中…"
-	b.title = ""
+	if !b.officialLoading {
+		b.officialLoading = true
+		b.reportStatus("読み込み中…")
+	}
+	b.title, b.officialTitleSource = "", ""
 }
 
 func (b *browser) loadOfficial(target string) {
@@ -259,17 +346,10 @@ func (b *browser) loadOfficial(target string) {
 	}
 	b.loading()
 	if err := b.web.Page().LoadURL(target); err != nil {
-		b.status = "ページを開けませんでした。"
+		b.officialLoading = false
+		b.reportStatus("ページを開けませんでした。")
 	}
 	b.win.Invalidate()
-}
-
-func (b *browser) search(byTag bool) {
-	if target := resolve(b.field, byTag); target != "" {
-		b.navigate(target)
-	} else {
-		b.status = "検索語・タグ・動画ID、またはニコニコ公式のHTTPS URLを入力してください。"
-	}
 }
 
 func (b *browser) current() string {
@@ -282,43 +362,132 @@ func (b *browser) current() string {
 	if b.index < 0 {
 		return ""
 	}
-	return b.navigation[b.index].link
+	return b.navigation[b.index].target
 }
 
 func (b *browser) currentTitle() string {
 	if b.official {
 		return b.title
 	}
-	return b.result.title
+	title := b.result.title
+	if b.index >= 0 && b.navigation[b.index].kind == screenSearch && title != "" {
+		r := b.navigation[b.index]
+		sort, ascending := r.searchSort()
+		order := "降順"
+		if ascending {
+			order = "昇順"
+		}
+		if sort.snapshotKey == "" {
+			order = "指定順"
+		}
+		title += fmt.Sprintf("（%s・%s / %dページ）", sort.label, order, r.page+1)
+	}
+	return title
 }
 
-func (b *browser) persist() bool {
+func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) {
 	if b.storeWarning != "" {
-		return false
+		return edit(&b.data), false
 	}
-	if err := saveLibrary(b.libraryPath, b.data); err != nil {
-		b.status = "保存に失敗しました。操作はこのセッションにのみ反映されます。"
-		return false
+	var latest library
+	err := withSettingsLock(b.libraryPath, func() error {
+		var err error
+		latest, err = loadLibrary(b.libraryPath)
+		if err != nil {
+			return err
+		}
+		dirty := false
+		for _, pending := range b.pendingLibraryEdits {
+			dirty = pending(&latest) || dirty
+		}
+		changed = edit(&latest)
+		if dirty || changed {
+			return saveLibrary(b.libraryPath, latest)
+		}
+		return nil
+	})
+	if err != nil {
+		changed = edit(&b.data)
+		if changed {
+			b.pendingLibraryEdits = append(b.pendingLibraryEdits, edit)
+		}
+		b.reportStatus("保存に失敗しました。次に登録や履歴を操作したときに再試行します。")
+		return changed, false
 	}
-	return true
+	b.pendingLibraryEdits = nil
+	b.data = latest
+	return changed, true
 }
 
 func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	e, ok := makeEntry(raw, title)
-	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
+	if p == nil || b.player != p || !ok || e.Kind != "動画" {
 		return
 	}
-	if e.Title == e.URL {
-		if i := slices.IndexFunc(b.data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
-			e.Title = b.data.History[i].Title
+	if p.historyTarget != "" {
+		if saved, ok := makeEntry(p.historyTarget, title); ok && saved.URL == e.URL {
+			e = saved
+		} else {
+			p.historyTarget = ""
 		}
 	}
-	if len(b.data.History) > 0 && b.data.History[0] == e {
-		return
+	suppressHistory := p.historySuppressed[e.URL]
+	newVisit := p.historyVisitURL != e.URL
+	visitedAt := time.Now().UTC()
+	recording := false
+	var recordedAt time.Time
+	b.changeLibrary(func(data *library) bool {
+		pinUpdated := data.fillPinTitle(e)
+		recording = !suppressHistory && b.canRecordHistory()
+		if !recording {
+			return pinUpdated
+		}
+		next := e
+		next.LastViewedAt = visitedAt
+		if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+			previous := data.History[i]
+			next = copyHistoryProgress(next, previous)
+			if next.Title == next.URL {
+				next.Title = previous.Title
+			}
+			if !previous.LastViewedAt.IsZero() && (!newVisit || previous.LastViewedAt.After(visitedAt)) {
+				next.LastViewedAt = previous.LastViewedAt
+			}
+		}
+		recordedAt = next.LastViewedAt
+		if len(data.History) > 0 && data.History[0] == next {
+			return pinUpdated
+		}
+		data.History = putFirst(data.History, next, 100)
+		return true
+	})
+	if recording {
+		if newVisit || p.historyVisitAt.IsZero() {
+			p.historyVisitAt, p.lastHistoryWrite = recordedAt, time.Time{}
+		}
+		p.historyVisitURL = e.URL
 	}
-	b.data.History = putFirst(b.data.History, e, 100)
-	b.persist()
-	b.win.Invalidate()
+	if b.win != nil {
+		b.win.Invalidate()
+	}
+}
+
+func (b *browser) updatePinTitle(raw, title string) {
+	if e, ok := makeEntry(raw, title); ok && b.storeWarning == "" && b.data.pinTitleUpdate(e) >= 0 {
+		b.changeLibrary(func(data *library) bool { return data.fillPinTitle(e) })
+	}
+}
+
+func (b *browser) updateOfficialPinTitle() {
+	if b.loaded && b.officialTitleSource == b.source {
+		b.updatePinTitle(b.source, b.title)
+	}
+}
+
+func (b *browser) finishOfficialPage(raw string) {
+	b.source, b.loaded = raw, allowedURL(raw) != nil
+	b.officialLoading = false
+	b.updateOfficialPinTitle()
 }
 
 func (b *browser) pinCurrent() {
@@ -327,38 +496,39 @@ func (b *browser) pinCurrent() {
 		return
 	}
 	if b.storeWarning != "" {
-		b.status = b.storeWarning
+		b.reportStatus(b.storeWarning)
 		return
 	}
-	if len(b.data.Pins) >= 500 || slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == e.URL }) {
-		b.status = "登録済み、または登録件数が上限に達しています。"
-		return
-	}
-	b.data.Pins = putFirst(b.data.Pins, e, 500)
-	b.history, b.showLibrary = false, true
-	if b.persist() {
-		b.status = e.Kind + "を登録しました。"
-	}
-}
-
-func (b *browser) remove(e entry) {
-	if b.storeWarning != "" {
-		b.status = b.storeWarning
-		return
-	}
-	items := &b.data.Pins
-	if b.history {
-		items = &b.data.History
-		if p := b.player; p != nil {
-			if p.historySuppressed == nil {
-				p.historySuppressed = make(map[string]bool)
-			}
-			p.historySuppressed[e.URL] = true
+	var added, renamed, duplicate bool
+	_, saved := b.changeLibrary(func(data *library) bool {
+		added, renamed = false, false
+		duplicate = slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL })
+		if duplicate {
+			renamed = data.fillPinTitle(e)
+			return renamed
 		}
+		if len(data.Pins) >= 500 {
+			return false
+		}
+		data.Pins = putFirst(data.Pins, e, 500)
+		added = true
+		return true
+	})
+	if added {
+		b.showLibrary = true
 	}
-	*items = slices.DeleteFunc(*items, func(x entry) bool { return x.URL == e.URL })
-	if b.persist() {
-		b.status = "選択した項目を削除しました。"
+	if saved {
+		switch {
+		case renamed:
+			b.reportStatus("登録済みの仮の名前を更新しました。")
+		case duplicate:
+			b.reportStatus("登録済みです。")
+		case added:
+			b.reportStatus(e.Kind + "を登録しました。")
+		default:
+			b.reportStatus("登録は500件までです。登録済みタブから不要な項目を削除してください。")
+			b.history, b.showLibrary = false, true
+		}
 	}
 }
 
@@ -368,40 +538,70 @@ func (b *browser) copyCurrent() {
 		return
 	}
 	if err := mygo.Clipboard.Write(transfer.TextData(target)); err != nil {
-		b.status = "クリップボードにコピーできませんでした。"
+		b.reportStatus("クリップボードにコピーできませんでした。")
 	} else {
-		b.status = "go-nico-list用のURLをコピーしました。"
+		message := "go-nico-list用のURLをコピーしました。"
+		if notice := mylistCopyCondition(b.current()); notice != "" {
+			message += " " + notice
+		}
+		b.reportStatus(message)
 	}
 }
 
 func (b *browser) draw(c *ui.Context) {
+	c.SetTheme(readableAppTheme(c.Theme()))
+	b.focusRegionShortcut(c)
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
+		if !b.closeHelpAcknowledged {
+			b.drawCloseHelp(c)
+		}
 		if b.showPlaybackSettings {
-			b.drawPlaybackSettings(c)
+			_, height := c.Size()
+			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
+		} else {
+			b.historySettingsChecked = time.Time{}
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
 				b.sidebar(c)
+				if b.libraryExpanded {
+					return
+				}
 			}
-			if !b.official {
+			if b.loginHelp {
+				b.drawLoginHelp(c, b.official && b.officialTarget == login)
+			} else if !b.official {
 				b.drawNative(c)
+				if b.focusContent {
+					b.focusContent = false
+					b.contentFocus.Focus(c)
+				}
 			} else if b.web != nil {
 				ui.WebView(c, b.web).Grow(1).MinWidth(0)
 			} else {
 				ui.Column(c).Grow(1).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 					ui.Text(c, b.status).Wrap()
+					if b.officialTarget == login {
+						b.drawLoginHelp(c, true)
+					}
 				})
 			}
 		})
-		if b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+		if b.undoRemoval != nil || b.ngReadWarning != "" || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
 			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
+				if b.undoRemoval != nil && ui.Button(c, "元に戻す").Clicked() {
+					b.undoLibraryRemoval()
+				}
 				if b.status != "" {
 					ui.Text(c, b.status).TextColor(t.TextMuted).Wrap()
 				}
 				if b.official && b.commentLanguageWarning {
 					ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted).Wrap()
+				}
+				if b.ngReadWarning != "" {
+					ui.Text(c, b.ngReadWarning).TextColor(t.TextMuted).Wrap()
 				}
 				if b.storeWarning != "" {
 					ui.Text(c, b.storeWarning).TextColor(t.TextMuted).Wrap()
@@ -409,6 +609,21 @@ func (b *browser) draw(c *ui.Context) {
 			})
 		}
 	})
+	for _, message := range b.statusAnnouncements {
+		c.Announce(message)
+	}
+	clear(b.statusAnnouncements)
+	b.statusAnnouncements = b.statusAnnouncements[:0]
+}
+
+func (b *browser) reportStatus(message string) {
+	b.status = message
+	if message != "" {
+		b.statusAnnouncements = append(b.statusAnnouncements, message)
+	}
+	if b.win != nil {
+		b.win.Invalidate()
+	}
 }
 
 func (b *browser) toolbar(c *ui.Context) {
@@ -419,9 +634,11 @@ func (b *browser) toolbar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(6).Padding(8, 10).Background(t.Surface).Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			back := b.official || b.index > 0
+			back := b.loginHelp || b.official || b.index > 0
 			forward := p != nil && p.CanGoForward() || !b.official && b.index+1 < len(b.navigation)
 			if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
+				b.libraryExpanded = false
+				b.loginHelp = false
 				if p != nil && p.CanGoBack() {
 					p.GoBack()
 				} else if b.official {
@@ -431,6 +648,8 @@ func (b *browser) toolbar(c *ui.Context) {
 				}
 			}
 			if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
+				b.libraryExpanded = false
+				b.loginHelp = false
 				if p != nil {
 					p.GoForward()
 				} else {
@@ -439,7 +658,7 @@ func (b *browser) toolbar(c *ui.Context) {
 			}
 			if ui.Button(c, "更新").Clicked() || c.Shortcut(0, ui.KeyF5) {
 				if p != nil {
-					b.loading()
+					b.beginOfficialLoading()
 					p.Reload()
 				} else if b.official {
 					go mygo.RunOnMain(b.attachOfficial)
@@ -450,15 +669,20 @@ func (b *browser) toolbar(c *ui.Context) {
 			if ui.Button(c, "ホーム").Clicked() {
 				b.navigate(home)
 			}
-			input := ui.TextInput(c, &b.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
-			if c.Shortcut(ui.Ctrl, ui.KeyL) {
+			input := ui.TextInput(c, &b.searchInput.field).Bind(&b.searchFocus).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
+			if b.focusSearch || c.Shortcut(ui.Ctrl, ui.KeyL) {
+				b.focusSearch = false
 				input.Focus()
 			}
-			if ui.PrimaryButton(c, "検索").Clicked() || input.Submitted() {
+			keyword := ui.PrimaryButton(c, "検索").Tooltip("キーワード検索").Checked(b.searchInput.active && !b.searchInput.byTag)
+			tag := ui.Button(c, "タグ検索").Checked(b.searchInput.active && b.searchInput.byTag)
+			switch {
+			case keyword.Clicked():
 				b.search(false)
-			}
-			if ui.Button(c, "タグ検索").Clicked() {
+			case tag.Clicked():
 				b.search(true)
+			case input.Submitted():
+				b.search(b.searchInput.byTag)
 			}
 		})
 		ui.Row(c).FillWidth().Gap(6).Wrap().AlignItems(ui.Center).Children(func() {
@@ -466,17 +690,34 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.leaveOfficial()
 			}
 			if ui.Button(c, "登録・履歴").Checked(b.showLibrary).Clicked() {
-				b.showLibrary = !b.showLibrary
+				b.toggleLibrary()
+				if !b.showLibrary {
+					b.libraryExpanded = false
+				}
+			}
+			if ui.Button(c, "結果へ移動").Disabled(b.official).Tooltip("本文へ移動（F6 で領域間を移動、Shift+F6 で逆順）").Clicked() {
+				b.focusResults(c)
 			}
 			if ui.Button(c, "マイリスト").Clicked() {
 				b.navigate(mylists)
 			}
-			saved, _ := canonical(b.current())
-			if ui.Button(c, "☆ 登録").Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
+			pin, canPin := makeEntry(b.current(), "")
+			pinLabel := "☆ 登録"
+			if canPin && slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == pin.URL }) {
+				pinLabel = "★ 登録済み"
+			}
+			if ui.Button(c, pinLabel).Tooltip("表示中のページを登録").Disabled(!canPin).Clicked() {
 				b.pinCurrent()
 			}
-			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
+			if ui.Button(c, "go-nico-list用URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
 				b.copyCurrent()
+			}
+			target, label := ordinaryShareURL(b.current())
+			if ui.Button(c, label).Disabled(target == "").Clicked() {
+				copyURL(c, target, b.reportStatus)
+			}
+			if notice := mylistCopyCondition(b.current()); notice != "" {
+				ui.Text(c, notice).Wrap().TextColor(t.TextMuted)
 			}
 			if ui.Button(c, "設定").Clicked() {
 				b.showPlaybackSettings = !b.showPlaybackSettings
@@ -491,7 +732,7 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.navigate(loginTarget)
 			}
 			ui.Text(c, b.loginState.label()).Role(ui.RoleStatus).TextColor(t.TextMuted)
-			if ui.Button(c, "再確認").Label("ログイン状態を再確認").Disabled(b.loginState == loginChecking).Clicked() {
+			if ui.Button(c, "再確認").Label("ログイン状態を再確認").Disabled(b.loginBusy).Clicked() {
 				b.checkLogin()
 			}
 		})
@@ -504,7 +745,14 @@ func (b *browser) sidebar(c *ui.Context) {
 	if width < 900 {
 		sidebarWidth = 174
 	}
-	ui.Column(c).Width(sidebarWidth).Background(c.Theme().Surface).Padding(10).Gap(8).Children(func() {
+	pane := ui.Column(c).Bind(&b.libraryRegion).Background(c.Theme().Surface).Padding(10).Gap(8)
+	if b.libraryExpanded {
+		pane.Grow(1).MinWidth(0)
+	} else {
+		pane.Width(sidebarWidth)
+	}
+	pane.Children(func() {
+		ui.Text(c, "登録・履歴").Bold().Focusable().Label("登録・履歴領域").Bind(&b.libraryFocus)
 		ui.Row(c).Gap(5).Children(func() {
 			if ui.Button(c, "登録済み").Disabled(!b.history).Clicked() {
 				b.history = false
@@ -513,29 +761,99 @@ func (b *browser) sidebar(c *ui.Context) {
 				b.history = true
 			}
 		})
+		label := "ライブラリを広く表示"
+		if b.libraryExpanded {
+			label = "通常表示に戻る"
+		}
+		if ui.Button(c, label).Clicked() {
+			b.libraryExpanded = !b.libraryExpanded
+		}
+		ui.TextInput(c, &b.libraryQuery).Label("ライブラリ内を検索").Placeholder("タイトル・URLを検索").FillWidth().MinWidth(0)
+		kind := b.libraryKind
+		if kind == "" {
+			kind = "すべての種類"
+		}
+		if ui.Select(c, &kind, libraryKinds).Label("保存した項目の種類").FillWidth().Changed() {
+			b.libraryKind = kind
+		}
 		items := b.data.Pins
 		if b.history {
 			items = b.data.History
 		}
-		if len(items) == 0 {
-			ui.Text(c, "表示する項目はありません。").TextColor(c.Theme().TextMuted).Wrap()
+		visible := filterLibrary(items, b.libraryQuery, kind)
+		ui.Text(c, fmt.Sprintf("%d / %d 件", len(visible), len(items))).TextColor(c.Theme().TextMuted)
+		if len(visible) == 0 {
+			notice := "条件に一致する項目はありません。"
+			if len(items) == 0 {
+				notice = "視聴履歴はありません。"
+				if !b.history {
+					notice = "動画や検索結果を開き、上の「☆ 登録」でここに保存できます。"
+				}
+			}
+			ui.Text(c, notice).TextColor(c.Theme().TextMuted).Wrap()
 			return
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+
+		ui.Scroll(c.Key(libraryResultKey{b.history, normalizeLibraryQuery(b.libraryQuery), kind})).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Gap(4).Children(func() {
-				for _, item := range items {
+				for _, item := range visible {
 					row := c.Key(item.URL)
 					ui.Row(row).Gap(4).AlignItems(ui.Center).Children(func() {
-						if ui.Button(row, "["+item.Kind+"] "+item.Title).Tooltip(item.Title).Grow(1).MinWidth(0).Clicked() {
-							b.navigate(item.URL)
+						label := libraryEntryLabel(item, b.history)
+						button := ui.Button(row, "").Label(label).Tooltip(item.Title).Grow(1).MinWidth(0).Justify(ui.Start).Children(func() {
+							line := ui.Text(row, label).Wrap()
+							if !b.libraryExpanded {
+								line.MaxLines(2)
+							}
+						})
+						if button.Clicked() {
+							b.navigate(item.openURL())
 						}
-						if ui.Button(row, "×").Label("削除").Clicked() {
+						if ui.Button(row, "×").Label(libraryDeleteLabel(item, b.history)).Clicked() {
 							b.remove(item)
 							return
 						}
 					})
+					if b.libraryExpanded {
+						ui.Text(row, item.openURL()).TextColor(c.Theme().TextMuted).Wrap()
+					}
+					if b.history {
+						b.drawHistoryResume(row, item)
+					}
 				}
 			})
 		})
 	})
+}
+
+func (b *browser) drawLoginHelp(c *ui.Context, retry bool) {
+	ui.Column(c).Grow(1).MinWidth(0).Padding(20).Gap(12).Children(func() {
+		ui.Text(c, "公式ログインを開く前に").FontSize(24).Bold()
+		ui.Text(c, "Windowsでは Microsoft Edge WebView2 Runtime が必要です。ニコニコの公式ログインを同じアプリ内で開きます。").Wrap()
+		ui.Text(c, "ニコニコのアカウントでログインしてください。外部事業者の認証先とアプリ外の別窓への移動には対応していません。").Wrap()
+		label := "公式ログインを開く"
+		if retry {
+			label = "ログイン画面を再試行"
+		}
+		if ui.PrimaryButton(c, label).Clicked() {
+			b.loginHelp = false
+			b.openOfficial(login)
+		}
+		if ui.Button(c, "検索へ戻る").Clicked() {
+			b.loginHelp = false
+			b.navigate(home)
+		}
+		if ui.Button(c, "WebView2 Runtime の公式案内（外部ブラウザー）").Clicked() {
+			if err := mygo.Shell.OpenExternal("https://developer.microsoft.com/microsoft-edge/webview2/"); err != nil {
+				b.reportStatus("Runtimeの案内を開けませんでした。")
+			}
+		}
+	})
+}
+
+func mylistCopyCondition(raw string) string {
+	if _, kind := canonical(raw); kind == "マイリスト" && goNicoListURL(raw) != "" {
+		return "非公開のリストは外部ツールでは取得できません。"
+	}
+	return ""
 }

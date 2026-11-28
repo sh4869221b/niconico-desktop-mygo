@@ -133,6 +133,10 @@ func playbackSessionEndpoint(u *url.URL, method string) bool {
 }
 
 func nativeStream(ctx context.Context, id string, session *http.Cookie) (nativeSource, error) {
+	return nativeStreamQuality(ctx, id, session, qualityAuto)
+}
+
+func nativeStreamQuality(ctx context.Context, id string, session *http.Cookie, quality streamQuality) (nativeSource, error) {
 	var result nativeSource
 	if !watchSegment.MatchString(id) {
 		return result, errors.New("無効な動画IDです")
@@ -149,22 +153,13 @@ func nativeStream(ctx context.Context, id string, session *http.Cookie) (nativeS
 		return result, fmt.Errorf("動画情報の取得に失敗しました。 %w", err)
 	}
 	m := w.Media.Domand
-	best := func(xs []mediaTrack) string {
-		var selected mediaTrack
-		for _, x := range xs {
-			if x.IsAvailable && x.ID != "" && (selected.ID == "" || x.QualityLevel > selected.QualityLevel) {
-				selected = x
-			}
-		}
-		return selected.ID
-	}
-	v, a := best(m.Videos), best(m.Audios)
-	if v == "" || a == "" || m.AccessRightKey == "" || w.Client.WatchTrackID == "" {
+	outputs := qualityOutputs(m.Videos, m.Audios, quality)
+	if len(outputs) == 0 || m.AccessRightKey == "" || w.Client.WatchTrackID == "" {
 		return result, errors.New("独自プレーヤーで利用できる配信がありません")
 	}
 	q.Set("actionTrackId", w.Client.WatchTrackID)
 	stream, err := streamJSON[struct{ ContentURL string }](ctx, h, "https://"+apiHost+"/v1/watch/"+id+"/access-rights/hls?"+q.Encode(),
-		map[string]any{"outputs": [][2]string{{v, a}}}, "application/json", map[string]string{"X-Access-Right-Key": m.AccessRightKey, "X-Request-With": "https://" + watchHost}, session)
+		map[string]any{"outputs": outputs}, "application/json", map[string]string{"X-Access-Right-Key": m.AccessRightKey, "X-Request-With": "https://" + watchHost}, session)
 	if err != nil {
 		return result, fmt.Errorf("HLS 配信許可の取得に失敗しました。 %w", err)
 	}
@@ -213,7 +208,7 @@ func nativeComments(ctx context.Context, w watchData) ([]timedComment, error) {
 			if c.VposMs < 0 || c.VposMs > 86_400_000 || strings.TrimSpace(c.Body) == "" || len(out) >= 15000 {
 				continue
 			}
-			c.Body = cleanDanmakuText(c.Body)
+			c.Body = cleanCommentListText(c.Body)
 			if c.Body == "" {
 				continue
 			}

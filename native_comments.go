@@ -61,13 +61,26 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 		return
 	}
 	n.pendingNG = commentNGEdit{}
-	if err := b.commentNG.change(edit.author, edit.block); err != nil {
+	title := ""
+	if b.player != nil {
+		title = b.player.title
+	}
+	if err := b.commentNG.changeWithDetails(edit.author, edit.block, title, time.Now()); err != nil {
 		n.ngNotice = "NG設定を保存できませんでした。"
 		return
 	}
 	n.applyCommentNG(b.commentNG.blocked)
+	if b.player != nil && b.player.native != nil && b.player.native != n {
+		b.player.native.applyCommentNG(b.commentNG.blocked)
+		if b.player.win != nil {
+			b.player.win.Invalidate()
+		}
+	}
+	if n != &b.settingsNG && b.win != nil {
+		b.win.Invalidate()
+	}
 	if edit.block {
-		n.ngNotice = "NGに登録しました。"
+		n.ngNotice = "NGに登録しました。" + commentNGScope(edit.author)
 	} else {
 		n.ngNotice = "NGを解除しました。"
 	}
@@ -104,6 +117,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		b.drawCommentNG(c, n)
 		return
 	}
+	if n.commentsFailed && ui.Button(c, "コメントを再取得").Disabled(n.commentsLoading).Clicked() {
+		b.fetchNativeComments(b.player, n)
+	}
 	if len(n.commentRows) == 0 {
 		msg := n.commentNotice
 		if msg == "" {
@@ -111,6 +127,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		}
 		ui.Text(c, msg).TextColor(t.TextMuted).Wrap()
 		return
+	}
+	if n.commentNotice != "" {
+		ui.Text(c, n.commentNotice).TextColor(t.TextMuted).Wrap()
 	}
 	n.commentList.Key = func(i int) any { return n.commentRows[i] }
 	follow := &n.follow
@@ -125,20 +144,34 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 			}
 		}
 	}
+	group := reachedCommentGroup(at, n.allComments, n.commentRows)
 	ui.List(c, &n.commentList, len(n.commentRows), func(i int) {
 		row := n.allComments[n.commentRows[i]]
 		line := ui.Row(c).FillWidth().AlignItems(ui.Start).Padding(3, 4).Gap(6)
-		if i%2 == 0 {
+		if row.VposMs == group {
+			line.Background(t.Selection)
+		} else if i%2 == 0 {
 			line.Background(t.Surface)
 		}
 		line.ContextMenu(func(m *ui.Menu) {
 			n.follow.manual = true
+			if row.author.ID != "" {
+				m.Item(commentNGScope(row.author)).Disabled(true)
+				m.Separator()
+			}
 			if m.Item("このユーザーを NG").Disabled(row.author.ID == "" || b.commentNG.path == "").Chosen() {
 				n.pendingNG = commentNGEdit{row.author, true}
 				c.Invalidate()
 			}
 		}).Children(func() {
-			ui.Text(c, formatPlaybackTime(time.Duration(row.VposMs)*time.Millisecond)).Width(46).TextColor(t.TextMuted)
+			label := formatPlaybackTime(time.Duration(row.VposMs) * time.Millisecond)
+			if row.VposMs == group {
+				ui.Text(c, "▶").Label("現在のコメント")
+			}
+			if ui.Button(c.Key("comment-time"), label).Label(label + "へ移動").Tooltip("このコメントの時刻へ移動（一時停止は保持）").Disabled(n.stream == nil).Clicked() {
+				n.stream.Seek(time.Duration(row.VposMs) * time.Millisecond)
+				n.follow.positioned = false
+			}
 			ui.Text(c, row.Body).Grow(1).MinWidth(0).Wrap()
 		})
 	}).Grow(1).MinHeight(0).FillWidth().Focusable().ObserveInput(func(ev ui.InputEvent) {
@@ -159,6 +192,14 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 	})
 }
 
+func reachedCommentGroup(at time.Duration, comments []timedComment, rows []int) int64 {
+	end := sort.Search(len(rows), func(i int) bool { return comments[rows[i]].VposMs > at.Milliseconds() })
+	if end == 0 {
+		return -1
+	}
+	return comments[rows[end-1]].VposMs
+}
+
 func (b *browser) drawCommentNG(c *ui.Context, n *nativePlayer) {
 	t := c.Theme()
 	if b.commentNG.path == "" {
@@ -177,11 +218,28 @@ func (b *browser) drawCommentNG(c *ui.Context, n *nativePlayer) {
 			label = "匿名 " + author.Video + " / " + author.ID[len(author.ID)-8:]
 		}
 		ui.Row(c).FillWidth().AlignItems(ui.Center).Gap(6).Children(func() {
-			ui.Text(c, label).Grow(1).MinWidth(0).Wrap()
+			ui.Column(c).Grow(1).MinWidth(0).Children(func() {
+				ui.Text(c, label).Wrap()
+				ui.Text(c, commentNGScope(author)).Wrap()
+				meta := b.commentNG.metadata[author]
+				if meta.Title != "" {
+					ui.Text(c, "登録した動画: "+meta.Title).Wrap()
+				}
+				if !meta.AddedAt.IsZero() {
+					ui.Text(c, "登録日: "+meta.AddedAt.Local().Format("2006-01-02")).Wrap()
+				}
+			})
 			if ui.Button(c, "解除").Label("解除 " + label).Clicked() {
 				n.pendingNG = commentNGEdit{author, false}
 				c.Invalidate()
 			}
 		})
 	}).Grow(1).MinHeight(0).FillWidth()
+}
+
+func commentNGScope(a commentAuthor) string {
+	if a.Video != "" {
+		return "この動画だけで非表示にします。匿名投稿者を別の動画とは結び付けません。"
+	}
+	return "この公開ユーザーIDをすべての動画で非表示にします。"
 }

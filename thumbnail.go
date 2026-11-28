@@ -173,3 +173,31 @@ func fetchThumbnail(ctx context.Context, client *http.Client, target string) *ui
 	img, _ := ui.DecodeBitmapScaled(data, 320)
 	return img
 }
+
+func (s *thumbnails) failed(target string) bool {
+	entry, ok := s.cache[target]
+	return target != "" && ok && entry.image == nil && !entry.retryAt.IsZero()
+}
+func (s *thumbnails) retry(target string) {
+	if !s.failed(target) {
+		return
+	}
+	delete(s.cache, target)
+	s.start()
+}
+func thumbnailFallback(item card, s *thumbnails) (string, string) {
+	symbol := "▤"
+	if routeFor(item.link).kind == screenVideo {
+		symbol = "▶"
+	}
+	if item.masked {
+		return symbol, "マスク表示"
+	}
+	if item.thumbnail == "" {
+		return symbol, "画像なし"
+	}
+	if s != nil && s.failed(item.thumbnail) {
+		return symbol, "取得失敗"
+	}
+	return symbol, "読込中"
+}
