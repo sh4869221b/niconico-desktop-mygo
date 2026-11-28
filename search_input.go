@@ -43,7 +43,7 @@ func (b *browser) search(byTag bool) {
 		target = exactSearchURL(mode, input.term)
 	}
 	if target == "" {
-		b.status = "検索語・タグ・動画ID、またはニコニコ公式のHTTPS URLを入力してください。"
+		b.reportStatus("検索語・タグ・動画ID、またはニコニコ公式のHTTPS URLを入力してください。")
 		return
 	}
 	if !displayed {

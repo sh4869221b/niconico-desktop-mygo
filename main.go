@@ -56,6 +56,7 @@ type browser struct {
 	loginCheck                   uint64
 	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
+	officialLoading              bool
 	loginHelp                    bool
 	officialTarget               string
 	officialTitleSource          string
@@ -79,6 +80,9 @@ type browser struct {
 	commentNG                    commentNG
 	settingsNG                   nativePlayer
 	nativeVolume                 float64
+	statusAnnouncements          []string
+	announcedResult              string
+	announcedResultEpoch         uint64
 	nativeDisplay                nativeDisplayPreferences
 	nativeDisplayNotice          string
 	nativeMuted                  bool
@@ -196,7 +200,8 @@ func (b *browser) attachOfficial() {
 		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session},
 	})
 	if err != nil {
-		b.status = "WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。"
+		b.officialLoading = false
+		b.reportStatus("WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。")
 		b.win.Invalidate()
 		return
 	}
@@ -214,11 +219,12 @@ func (b *browser) attachOfficial() {
 		}
 		if allowedURL(e.URL) == nil {
 			e.PreventDefault()
-			b.status = "ニコニコ以外への移動をブロックしました。"
+			message := "ニコニコ以外への移動をブロックしました。"
 			if b.officialTarget == login {
-				b.status += "外部事業者のログインは利用できません。"
+				message += "外部事業者のログインは利用できません。"
 				b.loginHelp = true
 			}
+			b.reportStatus(message)
 		} else if b.playOfficialLink(view, e.URL, false) {
 			e.PreventDefault()
 		} else {
@@ -239,16 +245,17 @@ func (b *browser) attachOfficial() {
 			// Do not re-enter the WebView2 callback to navigate.
 			go mygo.RunOnMain(func() {
 				if active() {
+					b.beginOfficialLoading()
 					b.loadOfficial(target)
 				}
 			})
 		} else {
-			b.status = "アプリ外の新規ウィンドウは開きません。"
+			message := "アプリ外の新規ウィンドウは開きません。"
 			if b.officialTarget == login {
-				b.status += "ニコニコのログイン方法を選んでください。"
+				message += "ニコニコのログイン方法を選んでください。"
 				b.loginHelp = true
 			}
-			b.win.Invalidate()
+			b.reportStatus(message)
 		}
 		return nil
 	})
@@ -282,9 +289,10 @@ func (b *browser) attachOfficial() {
 		b.finishOfficialPage(raw)
 		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
-		b.status = "ニコニコ公式ページ"
-		if !b.loaded {
-			b.status = "対応するページを開いてください。"
+		if b.loaded {
+			b.reportStatus("ニコニコ公式ページ")
+		} else {
+			b.reportStatus("対応するページを開いてください。")
 		}
 		b.win.Invalidate()
 	})
@@ -293,7 +301,8 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.loaded = false
-		b.status = "ページを読み込めませんでした。接続を確認してください。"
+		b.officialLoading = false
+		b.reportStatus("ページを読み込めませんでした。接続を確認してください。")
 		b.win.Invalidate()
 	})
 	p.OnRenderProcessGone(func(_ string) {
@@ -301,7 +310,8 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.loaded = false
-		b.status = "表示が終了しました。「更新」で再読み込みできます。"
+		b.officialLoading = false
+		b.reportStatus("表示が終了しました。「更新」で再読み込みできます。")
 		b.win.Invalidate()
 	})
 	b.loadOfficial(b.officialTarget)
@@ -316,9 +326,17 @@ func (b *browser) attachOfficial() {
 	})
 }
 
+func (b *browser) beginOfficialLoading() {
+	b.officialLoading = false
+	b.loading()
+}
+
 func (b *browser) loading() {
 	b.loaded = false
-	b.status = "読み込み中…"
+	if !b.officialLoading {
+		b.officialLoading = true
+		b.reportStatus("読み込み中…")
+	}
 	b.title, b.officialTitleSource = "", ""
 }
 
@@ -328,7 +346,8 @@ func (b *browser) loadOfficial(target string) {
 	}
 	b.loading()
 	if err := b.web.Page().LoadURL(target); err != nil {
-		b.status = "ページを開けませんでした。"
+		b.officialLoading = false
+		b.reportStatus("ページを開けませんでした。")
 	}
 	b.win.Invalidate()
 }
@@ -392,7 +411,7 @@ func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) 
 		if changed {
 			b.pendingLibraryEdits = append(b.pendingLibraryEdits, edit)
 		}
-		b.status = "保存に失敗しました。次に登録や履歴を操作したときに再試行します。"
+		b.reportStatus("保存に失敗しました。次に登録や履歴を操作したときに再試行します。")
 		return changed, false
 	}
 	b.pendingLibraryEdits = nil
@@ -467,6 +486,7 @@ func (b *browser) updateOfficialPinTitle() {
 
 func (b *browser) finishOfficialPage(raw string) {
 	b.source, b.loaded = raw, allowedURL(raw) != nil
+	b.officialLoading = false
 	b.updateOfficialPinTitle()
 }
 
@@ -476,7 +496,7 @@ func (b *browser) pinCurrent() {
 		return
 	}
 	if b.storeWarning != "" {
-		b.status = b.storeWarning
+		b.reportStatus(b.storeWarning)
 		return
 	}
 	var added, renamed, duplicate bool
@@ -500,13 +520,13 @@ func (b *browser) pinCurrent() {
 	if saved {
 		switch {
 		case renamed:
-			b.status = "登録済みの仮の名前を更新しました。"
+			b.reportStatus("登録済みの仮の名前を更新しました。")
 		case duplicate:
-			b.status = "登録済みです。"
+			b.reportStatus("登録済みです。")
 		case added:
-			b.status = e.Kind + "を登録しました。"
+			b.reportStatus(e.Kind + "を登録しました。")
 		default:
-			b.status = "登録は500件までです。登録済みタブから不要な項目を削除してください。"
+			b.reportStatus("登録は500件までです。登録済みタブから不要な項目を削除してください。")
 			b.history, b.showLibrary = false, true
 		}
 	}
@@ -518,12 +538,13 @@ func (b *browser) copyCurrent() {
 		return
 	}
 	if err := mygo.Clipboard.Write(transfer.TextData(target)); err != nil {
-		b.status = "クリップボードにコピーできませんでした。"
+		b.reportStatus("クリップボードにコピーできませんでした。")
 	} else {
-		b.status = "go-nico-list用のURLをコピーしました。"
-		if mylistCopyCondition(b.current()) != "" {
-			b.status += " " + mylistCopyCondition(b.current())
+		message := "go-nico-list用のURLをコピーしました。"
+		if notice := mylistCopyCondition(b.current()); notice != "" {
+			message += " " + notice
 		}
+		b.reportStatus(message)
 	}
 }
 
@@ -588,6 +609,21 @@ func (b *browser) draw(c *ui.Context) {
 			})
 		}
 	})
+	for _, message := range b.statusAnnouncements {
+		c.Announce(message)
+	}
+	clear(b.statusAnnouncements)
+	b.statusAnnouncements = b.statusAnnouncements[:0]
+}
+
+func (b *browser) reportStatus(message string) {
+	b.status = message
+	if message != "" {
+		b.statusAnnouncements = append(b.statusAnnouncements, message)
+	}
+	if b.win != nil {
+		b.win.Invalidate()
+	}
 }
 
 func (b *browser) toolbar(c *ui.Context) {
@@ -622,7 +658,7 @@ func (b *browser) toolbar(c *ui.Context) {
 			}
 			if ui.Button(c, "更新").Clicked() || c.Shortcut(0, ui.KeyF5) {
 				if p != nil {
-					b.loading()
+					b.beginOfficialLoading()
 					p.Reload()
 				} else if b.official {
 					go mygo.RunOnMain(b.attachOfficial)
@@ -678,7 +714,7 @@ func (b *browser) toolbar(c *ui.Context) {
 			}
 			target, label := ordinaryShareURL(b.current())
 			if ui.Button(c, label).Disabled(target == "").Clicked() {
-				copyURL(c, target, func(message string) { b.status = message })
+				copyURL(c, target, b.reportStatus)
 			}
 			if notice := mylistCopyCondition(b.current()); notice != "" {
 				ui.Text(c, notice).Wrap().TextColor(t.TextMuted)
@@ -809,7 +845,7 @@ func (b *browser) drawLoginHelp(c *ui.Context, retry bool) {
 		}
 		if ui.Button(c, "WebView2 Runtime の公式案内（外部ブラウザー）").Clicked() {
 			if err := mygo.Shell.OpenExternal("https://developer.microsoft.com/microsoft-edge/webview2/"); err != nil {
-				b.status = "Runtimeの案内を開けませんでした。"
+				b.reportStatus("Runtimeの案内を開けませんでした。")
 			}
 		}
 	})
