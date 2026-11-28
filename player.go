@@ -24,6 +24,7 @@ type playerWindow struct {
 	failedWebTarget        string
 	replaceFailedWebView   bool
 	historySuppressed      map[string]bool
+	historyVisitURL        string
 	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
@@ -37,6 +38,7 @@ type playerWindow struct {
 
 func (p *playerWindow) resumeHistory(video string) {
 	delete(p.historySuppressed, video)
+	p.historyVisitURL = ""
 }
 
 func (p *playerWindow) visitWebVideo(video string) {
