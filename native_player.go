@@ -415,6 +415,9 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			ui.Text(c, b.nativeAudioNotice).Role(ui.RoleStatus).Wrap()
 		}
 	})
+	// Drawing the video first synchronizes the engine's latest state. The
+	// final frame can then record completion even if no next frame is scheduled.
+	b.recordPlaybackProgress(p, c.Now(), false)
 	if !c.FocusTakesText() && !n.commentList.FocusWithin(c) {
 		if playerToggleShortcut(c, ui.KeySpace) {
 			if n.stream != nil {

@@ -17,11 +17,15 @@ import (
 const maxLibraryBytes = 2_000_000
 
 type entry struct {
-	URL          string
-	Title        string
-	Kind         string
-	Target       string    `json:",omitempty"`
-	LastViewedAt time.Time `json:",omitzero"`
+	URL             string
+	Title           string
+	Kind            string
+	Target          string    `json:",omitempty"`
+	LastViewedAt    time.Time `json:",omitzero"`
+	PositionKnown   bool      `json:",omitempty"`
+	PositionSeconds float64   `json:",omitempty"`
+	DurationSeconds float64   `json:",omitempty"`
+	Completed       bool      `json:",omitempty"`
 }
 type library struct {
 	Pins    []entry
@@ -57,10 +61,12 @@ func makeEntry(raw, title string) (entry, bool) {
 		}
 		target.RawQuery = q.Encode()
 	}
-	if r.kind == screenVideo && r.startTime() > 0 {
-		q := target.Query()
-		q.Set("from", strconv.FormatInt(int64(r.startTime()/time.Second), 10))
-		target.RawQuery = q.Encode()
+	if r.kind == screenVideo {
+		if start, ok := r.explicitStartTime(); ok {
+			q := target.Query()
+			q.Set("from", strconv.FormatInt(int64(start/time.Second), 10))
+			target.RawQuery = q.Encode()
+		}
 	} else if r.kind != screenOfficial && r.page > 0 {
 		q := target.Query()
 		q.Set("page", strconv.Itoa(r.page+1))
@@ -79,10 +85,11 @@ func normalize(xs []entry, limit int, videosOnly bool) []entry {
 	seen := make(map[string]bool)
 	out := make([]entry, 0, min(len(xs), limit))
 	for _, e := range xs {
-		viewed := e.LastViewedAt
+		original := e
 		e, ok := makeEntry(e.openURL(), e.Title)
 		if videosOnly {
-			e.LastViewedAt = viewed.UTC()
+			e.LastViewedAt = original.LastViewedAt.UTC()
+			e = copyHistoryProgress(e, original)
 		}
 		if !ok || seen[e.URL] || videosOnly && e.Kind != "動画" {
 			continue
