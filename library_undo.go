@@ -1,6 +1,9 @@
 package main
 
-import "slices"
+import (
+	"slices"
+	"time"
+)
 
 type libraryRemoval struct {
 	item       entry
@@ -27,8 +30,13 @@ func (b *browser) remove(e entry) {
 	}
 	history := b.history
 	undo := &libraryRemoval{history: history}
+	player := b.player
+	var visit *time.Time
+	if player != nil {
+		visit = player.queuedHistoryVisit
+	}
 	capture := true
-	changed, saved := b.changeLibrary(func(data *library) bool {
+	b.mutateLibrary(func(data *library) bool {
 		items := &data.Pins
 		if history {
 			items = &data.History
@@ -49,29 +57,29 @@ func (b *browser) remove(e entry) {
 		}
 		*items = slices.Delete(*items, i, i+1)
 		return true
-	})
-	// A delayed save may replay this edit without changing the undo record.
-	capture = false
-	if history && b.player != nil {
-		p := b.player
-		undo.player, undo.suppressed = p, p.historySuppressed[e.URL]
-		if p.historySuppressed == nil {
-			p.historySuppressed = make(map[string]bool)
+	}, func(changed, saved bool) {
+		// The synchronous fallback may replay this edit later.
+		capture = false
+		if history && player != nil && player == b.player && player.queuedHistoryVisit == visit {
+			undo.player, undo.suppressed = player, player.historySuppressed[e.URL]
+			if player.historySuppressed == nil {
+				player.historySuppressed = make(map[string]bool)
+			}
+			player.historySuppressed[e.URL] = true
 		}
-		p.historySuppressed[e.URL] = true
-	}
-	if !changed {
-		return
-	}
-	b.undoRemoval = undo
-	if saved {
-		b.reportStatus(libraryDeleteLabel(undo.item, history) + "しました。")
-	}
+		if !changed {
+			return
+		}
+		b.undoRemoval = undo
+		if saved {
+			b.reportStatus(libraryDeleteLabel(undo.item, history) + "しました。")
+		}
+	})
 }
 
 func (b *browser) undoLibraryRemoval() {
 	u := b.undoRemoval
-	if u == nil {
+	if u == nil || b.undoPending {
 		return
 	}
 	if b.storeWarning != "" {
@@ -79,7 +87,7 @@ func (b *browser) undoLibraryRemoval() {
 		return
 	}
 	var full bool
-	_, saved := b.changeLibrary(func(data *library) bool {
+	if b.mutateLibrary(func(data *library) bool {
 		items, limit := &data.Pins, 500
 		if u.history {
 			items, limit = &data.History, 100
@@ -106,18 +114,24 @@ func (b *browser) undoLibraryRemoval() {
 		}
 		*items = slices.Insert(*items, i, u.item)
 		return true
-	})
-	if full {
-		if saved {
-			b.reportStatus("件数が上限のため元に戻せません。")
+	}, func(_, saved bool) {
+		b.undoPending = false
+		if full {
+			if saved {
+				b.reportStatus("件数が上限のため元に戻せません。")
+			}
+			return
 		}
-		return
-	}
-	if u.history && b.player == u.player && u.player != nil && !u.suppressed {
-		delete(u.player.historySuppressed, u.item.URL)
-	}
-	b.undoRemoval = nil
-	if saved {
-		b.reportStatus(u.item.Title + "を元に戻しました。")
+		if u.history && b.player == u.player && u.player != nil && !u.suppressed {
+			delete(u.player.historySuppressed, u.item.URL)
+		}
+		if b.undoRemoval == u {
+			b.undoRemoval = nil
+		}
+		if saved {
+			b.reportStatus(u.item.Title + "を元に戻しました。")
+		}
+	}) && b.librarySaves != nil {
+		b.undoPending = true
 	}
 }

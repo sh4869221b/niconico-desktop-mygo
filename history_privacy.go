@@ -46,22 +46,45 @@ func (b *browser) canRecordHistory() bool {
 	return b.historySettingsErr == nil && !b.historyDisabled
 }
 
+func canRecordAt(path string) bool {
+	if path == "" {
+		return true
+	}
+	disabled, err := loadHistoryRecording(path)
+	return err == nil && !disabled
+}
+
 func (b *browser) setHistoryRecording(record bool) {
 	data, _ := json.Marshal(struct {
 		RecordHistory bool `json:"recordHistory"`
 	}{record})
-	if err := withSettingsLock(b.libraryPath, func() error {
-		if _, err := loadHistoryRecording(b.historySettingsPath); err != nil {
-			return err
+	libraryPath, preferencePath := b.libraryPath, b.historySettingsPath
+	save := func() error {
+		return withSettingsLock(libraryPath, func() error {
+			if _, err := loadHistoryRecording(preferencePath); err != nil {
+				return err
+			}
+			return writeSettings(preferencePath, data)
+		})
+	}
+	done := func(_, _ bool) {
+		b.historySettingPending = false
+		b.historyDisabled = !record
+		b.historyNotice = "記録設定を保存しました。保存済みの履歴は消去していません。"
+	}
+	if b.librarySaves != nil {
+		if b.submitLibrarySave(librarySaveRequest{settings: save, complete: done}) {
+			b.historySettingPending = true
+			b.historyNotice = "記録設定の保存を待っています…"
 		}
-		return writeSettings(b.historySettingsPath, data)
-	}); err != nil {
+		return
+	}
+	if err := save(); err != nil {
 		b.refreshHistoryRecording()
 		b.historyNotice = "履歴設定を保存できませんでした。"
 		return
 	}
-	b.historyDisabled = !record
-	b.historyNotice = "記録設定を保存しました。保存済みの履歴は消去していません。"
+	done(false, true)
 }
 func historyInPeriod(items []entry, period string, now time.Time) []entry {
 	days := map[string]time.Duration{"過去24時間": 24 * time.Hour, "過去7日間": 7 * 24 * time.Hour, "過去30日間": 30 * 24 * time.Hour}
@@ -83,8 +106,13 @@ func (b *browser) eraseSelectedHistory() {
 	for _, item := range b.historyErasePending {
 		selected[item.URL] = item.LastViewedAt
 	}
+	player := b.player
+	var visit *time.Time
+	if player != nil {
+		visit = player.queuedHistoryVisit
+	}
 	var removed []string
-	changed, saved := b.changeLibrary(func(data *library) bool {
+	if b.mutateLibrary(func(data *library) bool {
 		removed = removed[:0]
 		data.History = slices.DeleteFunc(data.History, func(e entry) bool {
 			viewedAt, ok := selected[e.URL]
@@ -95,25 +123,30 @@ func (b *browser) eraseSelectedHistory() {
 			return true
 		})
 		return len(removed) != 0
-	})
-	if changed {
-		if p := b.player; p != nil {
-			if p.historySuppressed == nil {
-				p.historySuppressed = make(map[string]bool)
+	}, func(changed, saved bool) {
+		if changed {
+			if player != nil && player == b.player && player.queuedHistoryVisit == visit {
+				if player.historySuppressed == nil {
+					player.historySuppressed = make(map[string]bool)
+				}
+				for _, raw := range removed {
+					player.historySuppressed[raw] = true
+				}
 			}
-			for _, raw := range removed {
-				p.historySuppressed[raw] = true
+			if b.undoRemoval != nil && b.undoRemoval.history {
+				b.undoRemoval = nil
 			}
 		}
-		if b.undoRemoval != nil && b.undoRemoval.history {
-			b.undoRemoval = nil
+		if saved {
+			b.historyNotice = fmt.Sprintf("視聴履歴を %d 件消去しました。登録済み項目は保持しています。", len(removed))
+		} else {
+			b.historyNotice = b.status
 		}
-	}
-	b.historyErasePending = nil
-	if saved {
-		b.historyNotice = fmt.Sprintf("視聴履歴を %d 件消去しました。登録済み項目は保持しています。", len(removed))
-	} else {
-		b.historyNotice = b.status
+	}) {
+		b.historyErasePending = nil
+		if b.librarySaves != nil {
+			b.historyNotice = "履歴の消去を待っています…"
+		}
 	}
 }
 func (b *browser) drawHistorySettings(c *ui.Context) {
@@ -121,7 +154,9 @@ func (b *browser) drawHistorySettings(c *ui.Context) {
 		now := c.Now()
 		next := b.historySettingsChecked.Add(time.Second)
 		if !now.Before(next) {
-			b.refreshHistoryRecording()
+			if b.librarySaves == nil || b.librarySaves.pending == 0 {
+				b.refreshHistoryRecording()
+			}
 			b.historySettingsChecked = now
 			next = now.Add(time.Second)
 		}
@@ -129,7 +164,7 @@ func (b *browser) drawHistorySettings(c *ui.Context) {
 	}
 	ui.Text(c, "視聴履歴").Bold()
 	record := !b.historyDisabled
-	if ui.Checkbox(c, &record, "今後の履歴を記録").Disabled(b.historySettingsErr != nil).Changed() {
+	if ui.Checkbox(c, &record, "今後の履歴を記録").Disabled(b.historySettingsErr != nil || b.historySettingPending).Changed() {
 		b.setHistoryRecording(record)
 	}
 	if b.historySettingsErr != nil {

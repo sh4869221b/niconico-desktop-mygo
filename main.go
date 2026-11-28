@@ -29,6 +29,12 @@ type browser struct {
 	commentLanguageWarning        bool
 	data                          library
 	pendingLibraryEdits           []func(*library) bool
+	librarySaves                  *librarySaveSession
+	libraryCloseReady             bool
+	libraryClosePreparing         bool
+	librarySessionEnding          bool
+	undoPending                   bool
+	pendingPinAdds                map[string]int
 	history, loaded, closed       bool
 	showLibrary                   bool
 	libraryQuery, libraryKind     string
@@ -39,6 +45,7 @@ type browser struct {
 	historySettingsErr                                error
 	historyDisabled                                   bool
 	historySettingsChecked                            time.Time
+	historySettingPending                             bool
 	historyErasePending                               []entry
 
 	storageOpen, storageBusy, playbackBlocked bool
@@ -47,6 +54,7 @@ type browser struct {
 
 	layoutPath                   string
 	layoutLoadErr                error
+	layoutRevision               uint64
 	focusSearch                  bool
 	closeHelpPath                string
 	closeHelpAcknowledged        bool
@@ -156,6 +164,23 @@ func (b *browser) start(initial string) {
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
 	_ = b.win.SetIcon(appIconPNG)
+	if b.storeWarning == "" {
+		b.startLibrarySaves(mygo.RunOnMain)
+	}
+	b.win.OnClose(func(event *mygo.CloseEvent) {
+		if !b.requestLibraryClose() {
+			event.PreventDefault()
+		}
+	})
+	removeQuitListener := mygo.App.OnBeforeQuit(func(event *mygo.QuitEvent) {
+		if event.SessionEnding {
+			b.librarySessionEnding = true
+			return
+		}
+		if !b.requestLibraryClose() {
+			event.PreventDefault()
+		}
+	})
 	b.session = mygo.NewSession("niconico-desktop-mygo")
 	b.catalog = newCatalog(func(target string) (*http.Cookie, error) {
 		return readSessionCookie(b.session.Cookies.List, target, time.Now())
@@ -167,6 +192,7 @@ func (b *browser) start(initial string) {
 	})
 	b.win.OnClosed(func() {
 		b.closed = true
+		removeQuitListener()
 		if b.stopLoginWatch != nil {
 			b.stopLoginWatch()
 		}
@@ -176,6 +202,9 @@ func (b *browser) start(initial string) {
 		b.cancelLoad()
 		if play := b.player; play != nil {
 			play.win.Close()
+		}
+		if b.librarySaves != nil {
+			close(b.librarySaves.queue.stop)
 		}
 	})
 	b.openNative(routeFor(home), true)
@@ -385,27 +414,33 @@ func (b *browser) currentTitle() string {
 	return title
 }
 
+func persistLibraryEdits(path string, pendingEdits []func(*library) bool, edit func(*library) bool) (latest library, changed bool, err error) {
+	err = observeLibrary60("transaction", func() error {
+		return withSettingsLock(path, func() error {
+			var err error
+			latest, err = loadLibrary(path)
+			if err != nil {
+				return err
+			}
+			dirty := false
+			for _, pending := range pendingEdits {
+				dirty = pending(&latest) || dirty
+			}
+			changed = edit(&latest)
+			if dirty || changed {
+				return saveLibrary(path, latest)
+			}
+			return nil
+		})
+	})
+	return latest, changed, err
+}
+
 func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) {
 	if b.storeWarning != "" {
 		return edit(&b.data), false
 	}
-	var latest library
-	err := withSettingsLock(b.libraryPath, func() error {
-		var err error
-		latest, err = loadLibrary(b.libraryPath)
-		if err != nil {
-			return err
-		}
-		dirty := false
-		for _, pending := range b.pendingLibraryEdits {
-			dirty = pending(&latest) || dirty
-		}
-		changed = edit(&latest)
-		if dirty || changed {
-			return saveLibrary(b.libraryPath, latest)
-		}
-		return nil
-	})
+	latest, changed, err := persistLibraryEdits(b.libraryPath, b.pendingLibraryEdits, edit)
 	if err != nil {
 		changed = edit(&b.data)
 		if changed {
@@ -433,24 +468,48 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	}
 	suppressHistory := p.historySuppressed[e.URL]
 	newVisit := p.historyVisitURL != e.URL
+	async := b.librarySaves != nil
+	visit := p.queuedHistoryVisit
+	if newVisit || visit == nil {
+		visit = new(time.Time)
+	}
+	canRecord := b.canRecordHistory
+	if async {
+		path := b.historySettingsPath
+		canRecord = func() bool { return canRecordAt(path) }
+	}
 	visitedAt := time.Now().UTC()
 	recording := false
 	var recordedAt time.Time
-	b.changeLibrary(func(data *library) bool {
+	edit := func(data *library) bool {
+		recordedAt = time.Time{}
 		pinUpdated := data.fillPinTitle(e)
-		recording = !suppressHistory && b.canRecordHistory()
+		recording = !suppressHistory && canRecord()
 		if !recording {
 			return pinUpdated
 		}
 		next := e
 		next.LastViewedAt = visitedAt
-		if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+		i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL })
+		if async && !visit.IsZero() && (i < 0 || !data.History[i].LastViewedAt.Equal(*visit)) {
+			// A title event for an existing visit must not resurrect a removed
+			// entry or replace another process's newer visit.
+			return pinUpdated
+		}
+		if i >= 0 {
 			previous := data.History[i]
+			if async && visit.IsZero() && previous.LastViewedAt.After(visitedAt) {
+				return pinUpdated
+			}
 			next = copyHistoryProgress(next, previous)
 			if next.Title == next.URL {
 				next.Title = previous.Title
 			}
-			if !previous.LastViewedAt.IsZero() && (!newVisit || previous.LastViewedAt.After(visitedAt)) {
+			sameVisit := !newVisit
+			if async {
+				sameVisit = !visit.IsZero()
+			}
+			if !previous.LastViewedAt.IsZero() && (sameVisit || previous.LastViewedAt.After(visitedAt)) {
 				next.LastViewedAt = previous.LastViewedAt
 			}
 		}
@@ -460,7 +519,22 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 		}
 		data.History = putFirst(data.History, next, 100)
 		return true
-	})
+	}
+	if async {
+		request := librarySaveRequest{edit: edit, committed: func() {
+			if !recordedAt.IsZero() {
+				*visit = recordedAt
+			}
+		}}
+		if b.submitLibrarySave(request) && !suppressHistory {
+			if newVisit || p.queuedHistoryVisit == nil {
+				p.lastHistoryWrite = time.Time{}
+			}
+			p.historyVisitURL, p.queuedHistoryVisit = e.URL, visit
+		}
+		return
+	}
+	b.changeLibrary(edit)
 	if recording {
 		if newVisit || p.historyVisitAt.IsZero() {
 			p.historyVisitAt, p.lastHistoryWrite = recordedAt, time.Time{}
@@ -473,8 +547,8 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 }
 
 func (b *browser) updatePinTitle(raw, title string) {
-	if e, ok := makeEntry(raw, title); ok && b.storeWarning == "" && b.data.pinTitleUpdate(e) >= 0 {
-		b.changeLibrary(func(data *library) bool { return data.fillPinTitle(e) })
+	if e, ok := makeEntry(raw, title); ok && b.storeWarning == "" && (b.data.pinTitleUpdate(e) >= 0 || b.pendingPinAdds[e.URL] > 0 && e.Title != e.URL) {
+		b.mutateLibrary(func(data *library) bool { return data.fillPinTitle(e) }, nil)
 	}
 }
 
@@ -500,7 +574,8 @@ func (b *browser) pinCurrent() {
 		return
 	}
 	var added, renamed, duplicate bool
-	_, saved := b.changeLibrary(func(data *library) bool {
+	layoutRevision := b.layoutRevision
+	if b.mutateLibrary(func(data *library) bool {
 		added, renamed = false, false
 		duplicate = slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL })
 		if duplicate {
@@ -513,11 +588,18 @@ func (b *browser) pinCurrent() {
 		data.Pins = putFirst(data.Pins, e, 500)
 		added = true
 		return true
-	})
-	if added {
-		b.showLibrary = true
-	}
-	if saved {
+	}, func(_, saved bool) {
+		if b.pendingPinAdds[e.URL] > 1 {
+			b.pendingPinAdds[e.URL]--
+		} else {
+			delete(b.pendingPinAdds, e.URL)
+		}
+		if added && b.layoutRevision == layoutRevision {
+			b.showLibrary = true
+		}
+		if !saved {
+			return
+		}
 		switch {
 		case renamed:
 			b.reportStatus("登録済みの仮の名前を更新しました。")
@@ -529,6 +611,11 @@ func (b *browser) pinCurrent() {
 			b.reportStatus("登録は500件までです。登録済みタブから不要な項目を削除してください。")
 			b.history, b.showLibrary = false, true
 		}
+	}) && b.librarySaves != nil {
+		if b.pendingPinAdds == nil {
+			b.pendingPinAdds = make(map[string]int)
+		}
+		b.pendingPinAdds[e.URL]++
 	}
 }
 
@@ -589,9 +676,11 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		if b.undoRemoval != nil || b.ngReadWarning != "" || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+		savingLibrary := b.librarySaves != nil && b.librarySaves.pending != 0
+		if savingLibrary || b.undoRemoval != nil || b.ngReadWarning != "" || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
 			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
-				if b.undoRemoval != nil && ui.Button(c, "元に戻す").Clicked() {
+				b.drawLibrarySaveStatus(c)
+				if b.undoRemoval != nil && ui.Button(c, "元に戻す").Disabled(b.undoPending).Clicked() {
 					b.undoLibraryRemoval()
 				}
 				if b.status != "" {
