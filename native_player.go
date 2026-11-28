@@ -226,6 +226,7 @@ func readPlaybackCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), now
 }
 
 func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
+	c.SetTheme(readableAppTheme(c.Theme()))
 	n := p.native
 	if n == nil {
 		p.draw(c, func(mode playbackMode) { b.recoverPlayer(p, mode) })
