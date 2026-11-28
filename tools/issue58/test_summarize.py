@@ -1,9 +1,26 @@
 import unittest
 
-from summarize import summarize
+from summarize import segment_ends, summarize
 
 
 class TrialSummary(unittest.TestCase):
+    def test_distinguishes_requested_target_from_prefetched_other_segments(self):
+        segments = segment_ends(("#EXTM3U", "#EXTINF:2.000,", "seg000.ts",
+                                 "#EXTINF:2.250,", "seg001.ts", "#EXT-X-ENDLIST"))
+        player = [
+            dict(event="trial-start", trial=1, utc_ns=20, paused=False, ready=True),
+            dict(event="seek", utc_ns=21, target_ns=2_000_000_000),
+            dict(event="trial-end", trial=1, utc_ns=30),
+        ]
+        earlier = dict(event="request", utc_ns=11, method="GET", path="/seg000.ts", range="", seq=1)
+        within = dict(event="request", utc_ns=22, method="GET", path="/seg001.ts", range="", seq=2)
+        result, = summarize(player, [earlier, within], segments)
+        self.assertEqual(result["target_segment"], "/seg001.ts")
+        self.assertEqual(result["target_gets_before_trial"], 0)
+        self.assertEqual(result["target_gets_in_trial"], 1)
+        prefetched, = summarize(player, [earlier, within, dict(within, utc_ns=19, seq=3)], segments)
+        self.assertEqual(prefetched["target_gets_before_trial"], 1)
+
     def test_pending_position_and_paused_trial_are_not_counted_as_resume(self):
         player = [
             dict(event="trial-start", trial=1, utc_ns=0, paused=False, ready=True),

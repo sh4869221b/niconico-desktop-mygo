@@ -41,6 +41,12 @@ func traceSeek58(target time.Duration) {
 	}
 }
 
+func traceNativeFailure58(message string) {
+	if seek58Log != nil {
+		_ = seek58Log.Encode(map[string]any{"event": "native-stream-failure", "utc_ns": time.Now().UnixNano(), "message": message})
+	}
+}
+
 // This opt-in interactive test opens the production native player view. It
 // records observations; closing the window does not assert that #58 is fixed.
 func TestMeasure58(t *testing.T) {
@@ -75,6 +81,7 @@ func TestMeasure58(t *testing.T) {
 		p := &playerWindow{native: n}
 		b := &browser{player: p}
 		var last string
+		var startupReported bool
 		var trial int
 		var inTrial bool
 		const windowTitle = "Issue 58 / local HLS"
@@ -92,6 +99,13 @@ func TestMeasure58(t *testing.T) {
 				p.win.SetTitle(fmt.Sprintf("%s / trial %d recording / F9 end", windowTitle, trial))
 			}
 			b.drawPlayer(p, c)
+			if !startupReported && (n.status != "" || s.Ready() && !s.Preparing()) {
+				visible, _ := c.WindowVisibleTime()
+				_ = seek58Log.Encode(map[string]any{"event": "startup-result", "utc_ns": time.Now().UnixNano(),
+					"window_visible_ns": visible.Nanoseconds(), "ready": s.Ready(), "preparing": s.Preparing(),
+					"failure": n.status})
+				startupReported = true
+			}
 			state := map[string]any{"event": "sample", "position_ns": s.Position().Nanoseconds(), "ready": s.Ready(), "preparing": s.Preparing(), "buffering": s.Buffering(), "playing": s.Playing(), "paused": s.Paused(), "failure": n.status}
 			if position, confirmed := s.ConfirmedPosition(); confirmed {
 				state["confirmed_position_ns"] = position.Nanoseconds()

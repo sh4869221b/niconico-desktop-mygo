@@ -164,6 +164,7 @@ func newNativeAttempt(route screenRoute, at time.Duration, paused bool, cancel c
 }
 
 func (n *nativePlayer) failStream(message string) {
+	traceNativeFailure58(message)
 	if n.startAt > 0 {
 		n.retryAt = n.startAt
 	}

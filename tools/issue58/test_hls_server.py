@@ -10,6 +10,28 @@ from hls_server import Server
 
 
 class FixtureTest(unittest.TestCase):
+    def test_delays_apply_only_to_selected_late_segments(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            files = {"index.m3u8": b"#EXTM3U\n", "seg029.ts": b"before", "seg030.ts": b"after"}
+            for name, data in files.items():
+                (root / name).write_bytes(data)
+            log = io.StringIO()
+            server = Server(root, latency_ms=3, kib_s=64, log=log, port=0, delay_from_segment=30)
+            thread = threading.Thread(target=server.serve_forever)
+            thread.start()
+            try:
+                for name, data in files.items():
+                    with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/{name}") as res:
+                        self.assertEqual(res.read(), data)
+            finally:
+                server.shutdown()
+                thread.join()
+                server.server_close()
+            responses = [row for row in map(json.loads, log.getvalue().splitlines()) if row["event"] == "response"]
+            self.assertEqual([(r["applied_latency_ms"], r["applied_kib_s"]) for r in responses],
+                             [(0, 0), (0, 0), (3, 64)])
+
     def test_http_evidence_ranges_and_root_boundary(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "root"

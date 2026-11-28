@@ -5,3 +5,5 @@ package main
 import "time"
 
 func traceSeek58(time.Duration) {}
+
+func traceNativeFailure58(string) {}
