@@ -101,6 +101,13 @@ func TestMediaFoundationAcceptsTargetFrameBeforeSeekNotification(t *testing.T) {
 		t.Fatal("the startup seek notification armed a normal playback frame step")
 	}
 	engine.seekSince = time.Now()
+	engine.seekTo = 20 * time.Second
+	if pos := engine.Position(); pos != engine.seekTo {
+		t.Fatalf("the slider should still show the requested position, got %v", pos)
+	}
+	if _, ok := engine.ConfirmedPosition(); ok {
+		t.Fatal("the requested position is not shareable as a confirmed resume point")
+	}
 	engine.event(eventSeeked, 0, 0)
 	if engine.seekEvents != 2 || !engine.landed || !engine.seekSince.IsZero() {
 		t.Fatal("the normal playback seek did not arm its frame step")

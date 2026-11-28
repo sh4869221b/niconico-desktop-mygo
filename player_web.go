@@ -18,8 +18,10 @@ import (
 var webPlayerPreload string
 
 type webPlaybackPosition struct {
-	seconds float64
-	paused  bool
+	seconds  float64
+	paused   bool
+	duration float64
+	ended    bool
 }
 
 type webPlaybackRestore struct {
@@ -78,7 +80,7 @@ func (p *playerWindow) captureWebPosition(page *mygo.Page) {
 	played, id, position := p.playedWatch, p.playedVideo, p.playedPosition
 	ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
 	defer cancel()
-	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.snapshot() ?? null`)
+	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.historySnapshot() ?? null`)
 	if err == nil && p.view != nil && p.playedWatch == played && p.playedVideo == id && p.playedPosition == position &&
 		p.document.revision == revision && page.URL() == source {
 		p.recordWebSnapshot(value, routeFor(source))
@@ -87,7 +89,7 @@ func (p *playerWindow) captureWebPosition(page *mygo.Page) {
 
 func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
 	fields, ok := value.([]any)
-	if !ok || len(fields) != 4 {
+	if !ok || len(fields) != 4 && len(fields) != 6 {
 		return
 	}
 	raw, urlOK := fields[0].(string)
@@ -96,6 +98,15 @@ func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
 	paused, pauseOK := fields[3].(bool)
 	if !urlOK || !idOK || !watchSegment.MatchString(video) || !timeOK || !pauseOK || !(seconds >= 0 && seconds < 1<<33) {
 		return
+	}
+	duration, ended := float64(0), false
+	if len(fields) == 6 {
+		var durationOK, endedOK bool
+		duration, durationOK = fields[4].(float64)
+		ended, endedOK = fields[5].(bool)
+		if !durationOK || !endedOK || !(duration >= 0 && duration < 1<<33) {
+			return
+		}
 	}
 	watch := routeFor(raw)
 	if watch.kind != screenVideo || watch.key != video && !numeric(watch.key, 20) ||
@@ -106,7 +117,7 @@ func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
 	// Completing a restore for B takes precedence over B's transient initial state.
 	p.notePlayedWatch(watch, video)
 	if p.restoring == nil {
-		p.playedPosition = &webPlaybackPosition{seconds: seconds, paused: paused}
+		p.playedPosition = &webPlaybackPosition{seconds: seconds, paused: paused, duration: duration, ended: ended}
 	}
 }
 
