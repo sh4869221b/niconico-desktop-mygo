@@ -171,8 +171,9 @@ type sliderSettings struct {
 }
 
 type sliderOptions struct {
-	step     float64
-	vertical bool
+	step              float64
+	keyStep, pageStep float64
+	vertical          bool
 }
 
 type sliderKey struct{}
@@ -205,6 +206,18 @@ func (e *node) Step(step float64) *node {
 	e.accStep = step
 	if e.widget == "Slider" || e.widget == "SliderBase" {
 		coreLocal(e, sliderKey{}, func() sliderSettings { return sliderSettings{} }).now.step = step
+	}
+	return e
+}
+
+// KeyboardStep sets arrow and page-key increments without snapping pointer input.
+func (e *node) KeyboardStep(arrow, page float64) *node {
+	if e.widget == "Slider" || e.widget == "SliderBase" {
+		settings := coreLocal(e, sliderKey{}, func() sliderSettings { return sliderSettings{} })
+		settings.now.keyStep, settings.now.pageStep = arrow, page
+		if arrow > 0 {
+			e.accStep = arrow
+		}
 	}
 	return e
 }
