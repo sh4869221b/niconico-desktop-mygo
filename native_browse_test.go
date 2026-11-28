@@ -15,11 +15,13 @@ func TestBrowseLongListNavigation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := browser{navigation: []screenRoute{r}, result: p, closed: true}
+	app := browser{navigation: []screenRoute{r}, closed: true}
+	app.presentNativeResult(p, nil)
 	view := ui.NewTester(func(c *ui.Context) {
-		app.result = catalogPage{}
-		if app.navigation[app.index] == r {
-			app.result = p
+		if app.navigation[app.index] != r && app.result.title == p.title {
+			// Stand in for the asynchronous fetch of the detail page. The
+			// list cannot be displayed again unless Back restores its cache.
+			app.result = catalogPage{}
 		}
 		app.draw(c)
 	}, 1260, 850)
@@ -46,13 +48,25 @@ func TestBrowseLongListNavigation(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		view.Scroll(700, 500, 0, 480)
 	}
-	click(p.items[99].title)
+	lastTitle := p.items[99].title
+	before, ok := view.Access(lastTitle)
+	if !ok || before.Offscreen {
+		t.Fatal("the last row was not in view before opening detail")
+	}
+	click(lastTitle)
 	checkRoute(p.items[99].link)
 	click("戻る")
 	checkRoute(r.target)
+	after, ok := view.Access(lastTitle)
+	if !ok || !after.Focused || after.Offscreen || after.Bounds.Y != before.Bounds.Y || len(app.result.items) != 100 {
+		t.Fatalf("returning from detail did not restore the cached row position and focus: before %+v, after %+v", before, after)
+	}
 	click("進む")
 	checkRoute(p.items[99].link)
 	click("戻る")
+	for range 40 {
+		view.Scroll(700, 500, 0, -480)
+	}
 	click("投稿者")
 	checkRoute(p.items[0].owner)
 	click("戻る")
