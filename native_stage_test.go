@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"image"
 	"testing"
 	"time"
@@ -49,5 +50,49 @@ func TestNativeFailureOffersRetryAndRetainsState(t *testing.T) {
 	v.Frame()
 	if _, ok := v.Find("独自プレーヤーで再試行"); ok {
 		t.Fatal("retry offered while already loading")
+	}
+}
+
+type failingNativeStageDecoder struct {
+	frames int
+}
+
+func (d *failingNativeStageDecoder) Rewind() error {
+	d.frames = 0
+	return nil
+}
+
+func (d *failingNativeStageDecoder) Next() (ui.VideoFrame, error) {
+	if d.frames != 0 {
+		return ui.VideoFrame{}, errors.New("fixture decoder stopped")
+	}
+	d.frames++
+	return ui.VideoFrame{Image: image.NewRGBA(image.Rect(0, 0, 40, 30)), Duration: time.Second}, nil
+}
+
+func TestRetryKeepsThePlayingIntentAndStartingPointAfterFailures(t *testing.T) {
+	stream, err := ui.NewVideoPlayer(new(failingNativeStageDecoder))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := ui.NewTester(func(c *ui.Context) { ui.Video(c, stream).Fill() }, 640, 480)
+	v.Advance(time.Second)
+	if stream.Err() == nil || stream.Playing() || stream.Paused() {
+		t.Fatalf("fixture did not fail during playback: %v", stream.Err())
+	}
+	route := routeFor(home + "watch/sm9?from=2")
+	previous := &nativePlayer{stream: stream, retryAt: 25 * time.Second, cancel: func() {}}
+	previous.failStream("mid-stream failure")
+	if previous.retryPaused || previous.retryAt != 25*time.Second {
+		t.Fatalf("lost playing intent or position: paused=%v time=%v", previous.retryPaused, previous.retryAt)
+	}
+	for range 2 {
+		next := newNativeAttempt(route, previous.retryAt, previous.retryPaused, func() {})
+		next.startAt = 0 // Media Foundation accepted the start but never displayed a picture.
+		next.failStream("startup timeout")
+		if next.retryAt != 25*time.Second || next.retryPaused {
+			t.Fatalf("consecutive failed retry discarded state: paused=%v time=%v", next.retryPaused, next.retryAt)
+		}
+		previous = next
 	}
 }
