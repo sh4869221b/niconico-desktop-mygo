@@ -38,13 +38,13 @@ func loadSidebarVisibility(path string) (bool, error) {
 func (b *browser) toggleLibrary() {
 	b.showLibrary = !b.showLibrary
 	if b.layoutLoadErr != nil {
-		b.status = "配置設定を読み込めなかったため上書きしません。この起動中だけ変更します。"
+		b.reportStatus("配置設定を読み込めなかったため上書きしません。この起動中だけ変更します。")
 		return
 	}
 	data, _ := json.Marshal(struct {
 		ShowLibrary bool `json:"showLibrary"`
 	}{b.showLibrary})
 	if b.layoutPath == "" || writeSettings(b.layoutPath, data) != nil {
-		b.status = "登録欄の表示状態を保存できませんでした。"
+		b.reportStatus("登録欄の表示状態を保存できませんでした。")
 	}
 }
