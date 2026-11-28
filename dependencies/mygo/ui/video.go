@@ -321,6 +321,24 @@ func (p *VideoPlayer) Position() time.Duration {
 	return p.curAt + min(max(pos-(p.end-p.curDur), 0), p.curDur)
 }
 
+// ConfirmedPosition reports the playback time suitable for a resume point.
+// It is unavailable while the player is preparing or an asynchronous seek
+// has yet to land.
+func (p *VideoPlayer) ConfirmedPosition() (time.Duration, bool) {
+	if p.closed || p.Preparing() || !p.Ready() || p.Err() != nil {
+		return 0, false
+	}
+	if p.eng != nil {
+		if p.eng.closed {
+			return 0, false
+		}
+		if e, ok := p.eng.e.(interface{ ConfirmedPosition() (time.Duration, bool) }); ok {
+			return e.ConfirmedPosition()
+		}
+	}
+	return p.Position(), true
+}
+
 // Seek shows the video at d, from its start, and goes on playing from
 // there unless paused: the frame of a decoder's video showing at d, which
 // it decodes from the start up to it.
