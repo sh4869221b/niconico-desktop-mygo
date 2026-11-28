@@ -30,6 +30,7 @@ type nativePlayer struct {
 	hideCommentPanel      bool
 	showOverview          bool
 	description           []descriptionPart
+	descriptionSource     string
 	publisher             videoPublisher
 	allComments           []timedComment
 	allCues               []danmakuCue
@@ -41,6 +42,14 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	displayPending        bool
+
+	metadataCtx                      context.Context
+	metadataRoute                    screenRoute
+	metadataWatch                    watchData
+	tagLoading, tagFailed            bool
+	commentsLoading, commentsFailed  bool
+	tagGeneration, commentGeneration uint64
 }
 
 const defaultNativeVolume = 80
@@ -67,8 +76,8 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &nativePlayer{
-		cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
-		showComments: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
+		descriptionSource: route.target, cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
+		showComments: true, displayPending: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
 	}
 	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
@@ -100,7 +109,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			} else if n.stream, err = video.OpenURL(local); err != nil {
 				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
-				n.stream.SetVolume(b.nativeVolume / 100)
+				b.applyNativeAudio(n.stream)
 				if n.stream.PrepareStart(n.startAt) {
 					n.startAt = 0
 				}
@@ -116,37 +125,14 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		if err != nil || ctx.Err() != nil {
 			return
 		}
-		go func() {
-			tags, publisher, err := playbackDetails(ctx, b.catalog, route, source.watch)
-			mygo.RunOnMain(func() {
-				if active() && ctx.Err() == nil {
-					n.tags, n.tagNotice = tags, "タグはありません。"
-					n.publisher = publisher
-					if err != nil {
-						n.tagNotice = "タグを取得できませんでした。"
-					}
-					p.win.Invalidate()
-				}
-			})
-		}()
 		_, _, description := plainDescription(source.watch.Video.Description)
 		mygo.RunOnMain(func() {
 			if active() && ctx.Err() == nil {
+				n.metadataCtx, n.metadataRoute, n.metadataWatch = ctx, route, source.watch
 				n.description = description
 				p.win.Invalidate()
-			}
-		})
-		comments, err := nativeComments(ctx, source.watch)
-		details := &nativeCommentData{rows: comments, cues: makeDanmakuCues(comments)}
-		if err != nil {
-			details.notice = "コメントを取得できませんでした。"
-		} else if len(comments) == 0 {
-			details.notice = "表示できる日本語コメントはありません。"
-		}
-		mygo.RunOnMain(func() {
-			if active() && ctx.Err() == nil {
-				n.stagedComments = details
-				p.win.Invalidate()
+				b.fetchNativeTags(p, n)
+				b.fetchNativeComments(p, n)
 			}
 		})
 	}()
@@ -223,10 +209,15 @@ func readPlaybackCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), now
 }
 
 func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
+	c.SetTheme(readableAppTheme(c.Theme()))
 	n := p.native
 	if n == nil {
-		p.draw(c)
+		p.draw(c, func(mode playbackMode) { b.recoverPlayer(p, mode) })
 		return
+	}
+	if n.displayPending {
+		b.applyNativeDisplay(n, c.Preferences().ReduceMotion)
+		n.displayPending = false
 	}
 	t := c.Theme()
 	w, h := c.Size()
@@ -238,11 +229,18 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if ui.Button(c, "公式 WebView で開く").Clicked() {
 					b.openPlayerMode(p.target, webPlayback)
 				}
-				if n.stream != nil && ui.Button(c, "コメント切替").Label("コメント表示切替").Clicked() {
+				if n.stream != nil && ui.Button(c, "弾幕を表示").Checked(n.showComments).Clicked() {
 					n.showComments = !n.showComments
+					b.nativeDisplay.Danmaku = "hide"
+					if n.showComments {
+						b.nativeDisplay.Danmaku = "show"
+					}
+					b.saveNativeDisplay()
 				}
 				if n.stream != nil && ui.Button(c, "コメント一覧").Checked(!n.hideCommentPanel).Clicked() {
 					n.hideCommentPanel = !n.hideCommentPanel
+					b.nativeDisplay.HideComments = n.hideCommentPanel
+					b.saveNativeDisplay()
 					n.follow.positioned = false
 				}
 				if n.loadingStream {
@@ -255,6 +253,9 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					}
 				}
 			})
+			if b.nativeDisplayNotice != "" {
+				ui.Text(c, b.nativeDisplayNotice).Role(ui.RoleStatus).Wrap()
+			}
 		})
 		s := n.stream
 		if s != nil {
@@ -310,7 +311,11 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 			panel := ui.Column(c).Padding(6, 8).Gap(5).Border(1, t.Border).Radius(6).Background(t.Background)
 			if compact {
-				panel.Height(min(144, h*0.21)).Shrink(0).FillWidth()
+				commentsHeight := h * 0.21
+				if h < 520 {
+					commentsHeight = h * 0.16
+				}
+				panel.Height(min(144, commentsHeight)).Shrink(0).FillWidth()
 			} else {
 				panel.Width(max(246, min(340, w*0.30))).FillHeight()
 			}
@@ -326,7 +331,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					toggleNativePlayback(s)
 				}
 				seconds := current.Seconds()
-				if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Disabled(s.Preparing()).Changed() {
+				if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Value(formatPlaybackTime(current)).Tooltip("矢印: 5秒移動 / Page Up・Down: 30秒移動 / Home・End: 先頭・末尾").Disabled(s.Preparing()).KeyboardStep(5, 30).Changed() {
 					s.Seek(time.Duration(seconds * float64(time.Second)))
 					n.follow.positioned = false
 				}
@@ -335,6 +340,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
 					b.nativeVolume = volume
 					s.SetVolume(volume / 100)
+					b.saveNativeAudio()
 				}
 				ui.Text(c, fmt.Sprintf("音量 %d%%", int(volume+0.5))).Width(68).TextAlign(ui.End)
 				mute := "ミュート"
@@ -343,9 +349,14 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				}
 				if ui.Button(c, mute).Clicked() {
 					s.SetMuted(!s.Muted())
+					b.nativeMuted = s.Muted()
+					b.saveNativeAudio()
 				}
 			})
 		})
+		if b.nativeAudioNotice != "" {
+			ui.Text(c, b.nativeAudioNotice).Role(ui.RoleStatus).Wrap()
+		}
 	})
 }
 
@@ -389,7 +400,13 @@ func drawNativeVideo(c *ui.Context, n *nativePlayer, current time.Duration) {
 func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height float32) {
 	// Cap each band against the window height even when controls wrap at large
 	// text sizes. The video gets the remaining space.
-	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, height*0.17)).Shrink(0).Children(func() {
+	infoHeight, overviewHeight := height*0.17, height*0.18
+	if height < 520 {
+		// At the smallest size the metadata and overview remain scrollable.
+		// Leave room for the video even when both are open and text wraps.
+		infoHeight, overviewHeight = height*0.13, height*0.13
+	}
+	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, infoHeight)).Shrink(0).Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Padding(3, 0).Children(func() {
 			ui.Row(c).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
 				label := "概要欄を表示"
@@ -398,6 +415,8 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 				}
 				if ui.Button(c.Key("overview-toggle"), label).Checked(n.showOverview).Clicked() {
 					n.showOverview = !n.showOverview
+					b.nativeDisplay.ShowOverview = n.showOverview
+					b.saveNativeDisplay()
 				}
 				if p := n.publisher; p != (videoPublisher{}) {
 					if p.name != "" {
@@ -417,15 +436,18 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 			if n.tagNotice != "" {
 				b.drawVideoTags(c, n.tags, n.tagNotice)
 			}
+			if n.tagFailed && ui.Button(c, "タグを再取得").Disabled(n.tagLoading).Clicked() {
+				b.fetchNativeTags(b.player, n)
+			}
 		})
 	})
 	if n.showOverview {
-		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, height*0.18)).Shrink(0).Focusable().Label("概要欄").Children(func() {
+		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, overviewHeight)).Shrink(0).Focusable().Label("概要欄").Children(func() {
 			ui.Column(c).FillWidth().Padding(6, 8).Background(c.Theme().Background).Children(func() {
 				if len(n.description) == 0 {
 					ui.Text(c, "概要はありません。").Wrap()
 				} else {
-					b.drawDescription(c, n.description)
+					b.drawDescription(c, n.description, n.descriptionSource)
 				}
 			})
 		})
