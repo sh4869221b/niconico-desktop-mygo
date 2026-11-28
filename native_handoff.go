@@ -6,21 +6,21 @@ import "time"
 func (p *playerWindow) nativeWebRestore(requested screenRoute, now time.Time) *webPlaybackRestore {
 	n := p.native
 	current := routeFor(p.target)
-	if n == nil || current.kind != screenVideo || requested.kind != screenVideo || current.link != requested.link {
+	if n == nil || current.kind != screenVideo || requested.kind != screenVideo || current.target != requested.target {
 		return nil
 	}
 	id := n.videoID
-	if id == "" {
+	if id == "" && !numeric(current.key, 20) {
 		id = current.key
 	}
-	if !watchSegment.MatchString(id) || !numeric(current.key, 20) && current.key != id {
+	if id != "" && (!watchSegment.MatchString(id) || !numeric(current.key, 20) && current.key != id) {
 		return nil
 	}
 	position := webPlaybackPosition{seconds: current.startTime().Seconds(), paused: n.pauseRequested}
-	if n.handoffPosition != nil {
-		position = *n.handoffPosition
+	if n.handoffKnown {
+		position.seconds = n.handoffTime.Seconds()
 	}
-	if s := n.stream; s != nil {
+	if s := n.stream; s != nil && s.Err() == nil {
 		position.paused = !s.Playing()
 		if s.Ready() && !s.Preparing() {
 			position.seconds = s.Position().Seconds()

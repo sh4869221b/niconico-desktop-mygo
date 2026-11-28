@@ -79,11 +79,24 @@ func writeSettings(path string, data []byte) error {
 }
 
 func (b *browser) changePlayback(m playbackMode) {
+	if b.playbackBlocked {
+		b.playbackNotice = "読めない再生設定は上書きしません。保存先と復旧を確認してください。"
+		return
+	}
 	if b.playMode == m {
 		return
 	}
-	if err := savePlayback(b.playbackPath, m); err != nil {
+	if err := withSettingsLock(b.playbackPath, func() error {
+		if _, err := loadPlayback(b.playbackPath); err != nil {
+			b.playbackBlocked = true
+			return err
+		}
+		return savePlayback(b.playbackPath, m)
+	}); err != nil {
 		b.playbackNotice = "再生設定を保存できませんでした。"
+		if b.playbackBlocked {
+			b.playbackNotice = "読めない再生設定は上書きしません。保存先と復旧を確認してください。"
+		}
 		return
 	}
 	b.playMode = m
@@ -91,6 +104,7 @@ func (b *browser) changePlayback(m playbackMode) {
 }
 
 func (b *browser) drawPlaybackSettings(c *ui.Context) {
+	b.applyPendingCommentNG(&b.settingsNG)
 	ui.Column(c).FillWidth().Padding(8, 14).Gap(6).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "再生プレーヤー").Bold()
@@ -110,6 +124,21 @@ func (b *browser) drawPlaybackSettings(c *ui.Context) {
 				ui.Text(c, b.playbackNotice).Wrap()
 			}
 		})
-		ui.Text(c, "どちらも別ウィンドウで開きます。独自プレーヤーで再生できない場合は公式プレーヤーで開けます。").Wrap()
+		ui.Text(c, "公式：公式の弾幕・コメント投稿・対応配信を利用できます。").Wrap()
+		ui.Text(c, "独自：日本語弾幕と端末内のローカルNGを利用できます。コメント投稿や一部の配信には対応していません。").Wrap()
+		ui.Text(c, "どちらも別ウィンドウで開きます。ここで選ぶ既定は次に開く動画から適用します。再生中の「公式 WebView で開く」はその動画だけの切替で、既定は変わりません。").Wrap()
+		if ui.Button(c, "ローカルNG管理").Checked(b.settingsNG.manageNG).Clicked() {
+			b.settingsNG.manageNG = !b.settingsNG.manageNG
+		}
+		if b.settingsNG.manageNG {
+			ui.Text(c, "この端末のNG設定（公式プレーヤーには適用されません）").Wrap()
+			if b.settingsNG.ngNotice != "" {
+				ui.Text(c, b.settingsNG.ngNotice).Role(ui.RoleStatus).Wrap()
+			}
+			ui.Column(c).Height(180).FillWidth().Children(func() { b.drawCommentNG(c, &b.settingsNG) })
+		}
+		b.drawNativeDisplaySettings(c)
+		b.drawHistorySettings(c)
+		b.drawStorageSettings(c)
 	})
 }
