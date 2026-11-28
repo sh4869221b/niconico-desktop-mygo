@@ -35,7 +35,7 @@ func TestPlayerHitTargetsAcrossDeviceScaleTransitions(t *testing.T) {
 		if !ok {
 			t.Fatal("seek slider missing")
 		}
-		for _, scale := range []float32{1, 1.5, 2, 1.5, 1} {
+		for _, scale := range []float32{1, 1.25, 1.5, 2, 1.5, 1.25, 1} {
 			view.SetScale(scale)
 			slider, ok := view.Access("再生位置")
 			if !ok || slider.Bounds != baseline.Bounds {
@@ -97,6 +97,14 @@ func TestPlayerHitTargetsAcrossDeviceScaleTransitions(t *testing.T) {
 			row, ok := view.Find("DPI comment row")
 			if !ok || row.W <= 0 || row.H <= 0 {
 				t.Fatalf("comment row disappeared at scale %.1f", scale)
+			}
+			jump, ok := view.Find(formatPlaybackTime(0) + "へ移動")
+			if !ok {
+				t.Fatalf("comment timestamp is missing at scale %.2f", scale)
+			}
+			view.ClickAt(jump.X+jump.W/2, jump.Y+jump.H/2)
+			if stream.Position() != 0 || stream.Playing() {
+				t.Fatalf("comment timestamp did not seek to the start and stay paused at scale %.2f", scale)
 			}
 		}
 	}
