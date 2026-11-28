@@ -164,6 +164,7 @@ func newNativeAttempt(route screenRoute, at time.Duration, paused bool, cancel c
 }
 
 func (n *nativePlayer) failStream(message string) {
+	traceNativeFailure58(message)
 	if n.startAt > 0 {
 		n.retryAt = n.startAt
 	}
@@ -397,7 +398,9 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				}
 				seconds := current.Seconds()
 				if duration > 0 && ui.Slider(c, &seconds, 0, duration.Seconds()).Grow(1).MinWidth(50).Label("再生位置").Value(formatPlaybackTime(current)).Tooltip("矢印: 5秒移動 / Page Up・Down: 30秒移動 / Home・End: 先頭・末尾").Disabled(s.Preparing()).KeyboardStep(5, 30).Changed() {
-					s.Seek(time.Duration(seconds * float64(time.Second)))
+					target := time.Duration(seconds * float64(time.Second))
+					traceSeek58(target)
+					s.Seek(target)
 					n.follow.positioned = false
 				}
 				ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackDuration(duration))
