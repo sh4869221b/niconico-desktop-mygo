@@ -113,6 +113,14 @@ func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
 		source.kind == screenVideo && source.link != watch.link {
 		return
 	}
+	if state := p.restoring; state != nil && state.video == "" {
+		// A numeric watch path may be an alias. Only a bridge sample from
+		// its committed route has verified the real media session's ID.
+		if source.kind != screenVideo || source.key != state.routeID || watch.key != state.routeID {
+			return
+		}
+		state.video = video
+	}
 	// The bridge can still offer B's last sample after a same-document search.
 	// Completing a restore for B takes precedence over B's transient initial state.
 	p.notePlayedWatch(watch, video)
@@ -156,7 +164,7 @@ func (p *playerWindow) showWebRestoreFailure() {
 
 func (p *playerWindow) applyWebRestore(page *mygo.Page, route screenRoute) {
 	state := p.restoring
-	if state == nil || !state.matches(route) {
+	if state == nil || state.video == "" || !state.matches(route) {
 		return
 	}
 	encodedVideo, _ := json.Marshal(state.video)
