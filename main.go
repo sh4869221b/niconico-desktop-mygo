@@ -405,6 +405,13 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if p == nil || b.player != p || !ok || e.Kind != "動画" {
 		return
 	}
+	if p.historyTarget != "" {
+		if saved, ok := makeEntry(p.historyTarget, title); ok && saved.URL == e.URL {
+			e = saved
+		} else {
+			p.historyTarget = ""
+		}
+	}
 	suppressHistory := p.historySuppressed[e.URL]
 	newVisit := p.historyVisitURL != e.URL
 	visitedAt := time.Now().UTC()

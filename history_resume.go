@@ -125,11 +125,11 @@ func (b *browser) drawHistoryResume(c *ui.Context, e entry) {
 	ui.Row(c).Wrap().Gap(4).Children(func() {
 		if e.PositionKnown && !e.Completed && e.PositionSeconds > 0 {
 			if ui.Button(c, "続きから").Label(e.Title + "を続きから再生").Clicked() {
-				b.openPlayer(historyPlaybackURL(e, true))
+				b.openPlayerWithHistoryTarget(historyPlaybackURL(e, true), b.playMode, e.openURL())
 			}
 		}
 		if ui.Button(c, "最初から").Label(e.Title + "を最初から再生").Clicked() {
-			b.openPlayer(historyPlaybackURL(e, false))
+			b.openPlayerWithHistoryTarget(historyPlaybackURL(e, false), b.playMode, e.openURL())
 		}
 	})
 }

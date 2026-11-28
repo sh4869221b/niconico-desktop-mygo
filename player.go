@@ -29,6 +29,7 @@ type playerWindow struct {
 	saveHistory            func(bool)
 	historyVisitURL        string
 	historyVisitAt         time.Time
+	historyTarget          string // saved watch URL before applying a generated resume position
 	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
@@ -175,6 +176,10 @@ func (p *playerWindow) canFocusPlayback(route screenRoute, mode playbackMode, pa
 }
 
 func (b *browser) openPlayerMode(raw string, mode playbackMode) {
+	b.openPlayerWithHistoryTarget(raw, mode, "")
+}
+
+func (b *browser) openPlayerWithHistoryTarget(raw string, mode playbackMode, historyTarget string) {
 	if mode != nativePlayback {
 		mode = webPlayback
 	}
@@ -203,12 +208,16 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 		}
 		if p := b.player; p != nil && p.mode != mode {
 			b.flushPlayerProgress(p)
+			if historyTarget == "" && raw == p.target {
+				historyTarget = p.historyTarget
+			}
 			b.player = nil
 			p.win.Close()
 		}
 		if p := b.player; p != nil {
 			b.flushPlayerProgress(p)
 			p.resumeHistory(route.link)
+			p.historyTarget = historyTarget
 			if p.mode == nativePlayback {
 				b.loadNativePlayer(p, route)
 				p.win.Show()
@@ -223,7 +232,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			p.win.Focus()
 			return
 		}
-		p := &playerWindow{mode: mode, target: route.target, webVideo: route.link, status: "再生を準備しています…"}
+		p := &playerWindow{mode: mode, target: route.target, historyTarget: historyTarget, webVideo: route.link, status: "再生を準備しています…"}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			StateKey: "player", Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,

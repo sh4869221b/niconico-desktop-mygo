@@ -179,6 +179,25 @@ func TestProgressDoesNotModifyDisabledHistoryOrAnotherVisit(t *testing.T) {
 	}
 }
 
+func TestGeneratedResumePositionDoesNotBecomeAnExplicitStart(t *testing.T) {
+	const watch = home + "watch/sm9"
+	e, _ := makeEntry(watch, "fixture")
+	e.PositionKnown, e.PositionSeconds = true, 60
+	generated := historyPlaybackURL(e, true)
+	if generated != watch+"?from=60" {
+		t.Fatalf("unexpected first resume URL: %s", generated)
+	}
+	p := &playerWindow{historyTarget: e.openURL(), target: generated}
+	b := &browser{player: p, libraryPath: filepath.Join(t.TempDir(), "library.json")}
+	b.recordVideo(p, generated, e.Title)
+	r := routeFor(generated)
+	p.recordWebSnapshot([]any{r.target, r.key, 95.0, true, 120.0, false}, r)
+	b.recordPlaybackProgress(p, time.Now(), true)
+	if next := historyPlaybackURL(b.data.History[0], true); next != watch+"?from=95" {
+		t.Fatalf("automatically generated start became a fixed override: %s", next)
+	}
+}
+
 func TestHistoryResumeChoiceAndBadSnapshot(t *testing.T) {
 	e, _ := makeEntry(home+"watch/sm9", "作品")
 	e.PositionKnown = true
