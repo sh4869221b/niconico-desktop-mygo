@@ -112,6 +112,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		ui.Text(c, msg).TextColor(t.TextMuted).Wrap()
 		return
 	}
+	if n.commentNotice != "" {
+		ui.Text(c, n.commentNotice).TextColor(t.TextMuted).Wrap()
+	}
 	n.commentList.Key = func(i int) any { return n.commentRows[i] }
 	follow := &n.follow
 	force := !follow.positioned || at < follow.lastAt || at-follow.lastAt > 250*time.Millisecond
