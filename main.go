@@ -30,6 +30,8 @@ type browser struct {
 	data                         library
 	history, loaded, closed      bool
 	showLibrary                  bool
+	closeHelpPath                string
+	closeHelpAcknowledged        bool
 	session                      *mygo.Session
 	loginState                   loginState
 	loginBusy                    bool
@@ -78,6 +80,8 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.closeHelpPath = filepath.Join(dir, "NiconicoDesktopMyGo", "close-help.json")
+		b.closeHelpAcknowledged = loadCloseHelp(b.closeHelpPath)
 		b.searchSortPath = filepath.Join(dir, "NiconicoDesktopMyGo", "search-sort.json")
 		b.searchDefault = loadSearchSort(b.searchSortPath)
 		if mode, err := loadPlayback(b.playbackPath); err == nil {
@@ -391,6 +395,9 @@ func (b *browser) draw(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).Fill().Background(t.Background).Children(func() {
 		b.toolbar(c)
+		if !b.closeHelpAcknowledged {
+			b.drawCloseHelp(c)
+		}
 		if b.showPlaybackSettings {
 			b.drawPlaybackSettings(c)
 		}
