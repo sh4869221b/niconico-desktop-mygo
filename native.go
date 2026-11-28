@@ -56,10 +56,17 @@ func (b *browser) openNative(r screenRoute, add bool) {
 		b.closeOfficial()
 	}
 	if add && (b.index == -1 || b.navigation[b.index] != r) {
+		if b.index >= 0 {
+			b.nativeVisit()
+		}
 		b.navigation = append(b.navigation[:b.index+1], r)
+		clear(b.nativeVisits[b.index+1:])
+		b.nativeVisits = append(b.nativeVisits[:b.index+1], nil)
 		b.index++
 		if len(b.navigation) > 100 {
 			b.navigation = b.navigation[1:]
+			b.nativeVisits[0] = nil
+			b.nativeVisits = b.nativeVisits[1:]
 			b.index--
 		}
 	}
@@ -71,6 +78,16 @@ func (b *browser) moveNative(delta int) {
 	if next >= 0 && next < len(b.navigation) {
 		b.index = next
 		b.showSearchRoute(b.navigation[next])
+		visit := b.nativeVisit()
+		visit.restoreFocus = visit.focusLink != ""
+		if visit.hasPage {
+			b.cancelLoad()
+			b.result, b.resultErr, b.busy, b.status = visit.page, nil, false, visit.page.searchMode
+			if b.win != nil {
+				b.win.Invalidate()
+			}
+			return
+		}
 		b.refreshNative()
 	}
 }
@@ -117,8 +134,7 @@ func (b *browser) refreshNative() {
 				return
 			}
 			b.applyCatalogContext(r, &p)
-			b.result, b.resultErr, b.busy = p, err, false
-			b.status = p.searchMode
+			b.presentNativeResult(p, err)
 			b.win.Invalidate()
 		})
 	}()
@@ -339,9 +355,23 @@ func (b *browser) drawNative(c *ui.Context) {
 			if p.author != "" || p.summary != "" || len(p.links) > 0 {
 				introRows = 1
 			}
-			listScope := scope.Key(epoch).Key(r.page)
+			visit := b.nativeVisit()
+			listScope := scope.Key(visit)
 			pane := ui.Column(listScope).Grow(1).MinHeight(0).MinWidth(0)
-			state := ui.Local(pane, "viewport", func() ui.ListState { return ui.ListState{} })
+			state := &visit.list
+			// Links identify a row even if a refresh puts other rows above it.
+			// A duplicate link uses its occurrence, rather than sharing focus keys.
+			keys := visit.keysFor(p.items, introRows)
+			state.Key = func(i int) any { return keys[i] }
+			if visit.restoreFocus {
+				index := slices.IndexFunc(p.items, func(item card) bool { return item.link == visit.focusLink })
+				if index < 0 {
+					visit.restoreFocus = false
+				} else if visit.revealFocus {
+					state.ScrollIntoView(index + introRows)
+				}
+				visit.revealFocus = false
+			}
 			if b.thumbnails != nil {
 				first, last := state.Visible()
 				start := max(0, first-introRows)
@@ -358,7 +388,7 @@ func (b *browser) drawNative(c *ui.Context) {
 						ui.Column(listScope).FillWidth().Gap(8).Children(func() { b.drawCatalogIntro(listScope, p) })
 						return
 					}
-					b.drawCatalogItem(listScope, r.kind, p.items[i-introRows])
+					b.drawCatalogItem(listScope, r.kind, p.items[i-introRows], visit)
 				}).Grow(1).MinHeight(0).Gap(6)
 			})
 			return
@@ -435,7 +465,7 @@ func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
 	}
 }
 
-func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card) {
+func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card, visit *catalogVisit) {
 	t := scope.Theme()
 	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(10).Padding(6, 8).Radius(6).Background(t.Surface).Children(func() {
 		b.drawThumbnail(scope.Key(item.link), item)
@@ -443,7 +473,12 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 			title := ui.Button(scope, "").Label(item.title).Tooltip(item.title).FillWidth().MinWidth(0).Justify(ui.Start).Children(func() {
 				ui.Text(scope, item.title).Wrap().MaxLines(2)
 			})
+			if visit.restoreFocus && visit.focusLink == item.link {
+				visit.restoreFocus = false
+				title.Focus()
+			}
 			if title.Clicked() {
+				visit.focusLink = item.link
 				b.navigate(item.link)
 			}
 			if item.summary != "" {
