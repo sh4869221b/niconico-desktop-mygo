@@ -43,6 +43,7 @@ type browser struct {
 	loginCheck                   uint64
 	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
+	loginHelp                    bool
 	officialTarget               string
 	catalog                      catalog
 	thumbnails                   *thumbnails
@@ -192,6 +193,10 @@ func (b *browser) attachOfficial() {
 		if allowedURL(e.URL) == nil {
 			e.PreventDefault()
 			b.status = "ニコニコ以外への移動をブロックしました。"
+			if b.officialTarget == login {
+				b.status += "外部事業者のログインは利用できません。"
+				b.loginHelp = true
+			}
 		} else if b.playOfficialLink(view, e.URL, false) {
 			e.PreventDefault()
 		} else {
@@ -217,6 +222,10 @@ func (b *browser) attachOfficial() {
 			})
 		} else {
 			b.status = "アプリ外の新規ウィンドウは開きません。"
+			if b.officialTarget == login {
+				b.status += "ニコニコのログイン方法を選んでください。"
+				b.loginHelp = true
+			}
 			b.win.Invalidate()
 		}
 		return nil
@@ -448,13 +457,18 @@ func (b *browser) draw(c *ui.Context) {
 			if b.showLibrary {
 				b.sidebar(c)
 			}
-			if !b.official {
+			if b.loginHelp {
+				b.drawLoginHelp(c, b.official && b.officialTarget == login)
+			} else if !b.official {
 				b.drawNative(c)
 			} else if b.web != nil {
 				ui.WebView(c, b.web).Grow(1).MinWidth(0)
 			} else {
 				ui.Column(c).Grow(1).AlignItems(ui.Center).Justify(ui.Center).Children(func() {
 					ui.Text(c, b.status).Wrap()
+					if b.officialTarget == login {
+						b.drawLoginHelp(c, true)
+					}
 				})
 			}
 		})
@@ -485,9 +499,10 @@ func (b *browser) toolbar(c *ui.Context) {
 	t := c.Theme()
 	ui.Column(c).FillWidth().Gap(6).Padding(8, 10).Background(t.Surface).Children(func() {
 		ui.Row(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
-			back := b.official || b.index > 0
+			back := b.loginHelp || b.official || b.index > 0
 			forward := p != nil && p.CanGoForward() || !b.official && b.index+1 < len(b.navigation)
 			if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
+				b.loginHelp = false
 				if p != nil && p.CanGoBack() {
 					p.GoBack()
 				} else if b.official {
@@ -497,6 +512,7 @@ func (b *browser) toolbar(c *ui.Context) {
 				}
 			}
 			if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
+				b.loginHelp = false
 				if p != nil {
 					p.GoForward()
 				} else {
@@ -619,6 +635,31 @@ func (b *browser) sidebar(c *ui.Context) {
 				}
 			})
 		})
+	})
+}
+
+func (b *browser) drawLoginHelp(c *ui.Context, retry bool) {
+	ui.Column(c).Grow(1).MinWidth(0).Padding(20).Gap(12).Children(func() {
+		ui.Text(c, "公式ログインを開く前に").FontSize(24).Bold()
+		ui.Text(c, "Windowsでは Microsoft Edge WebView2 Runtime が必要です。ニコニコの公式ログインを同じアプリ内で開きます。").Wrap()
+		ui.Text(c, "ニコニコのアカウントでログインしてください。外部事業者の認証先とアプリ外の別窓への移動には対応していません。").Wrap()
+		label := "公式ログインを開く"
+		if retry {
+			label = "ログイン画面を再試行"
+		}
+		if ui.PrimaryButton(c, label).Clicked() {
+			b.loginHelp = false
+			b.openOfficial(login)
+		}
+		if ui.Button(c, "検索へ戻る").Clicked() {
+			b.loginHelp = false
+			b.navigate(home)
+		}
+		if ui.Button(c, "WebView2 Runtime の公式案内（外部ブラウザー）").Clicked() {
+			if err := mygo.Shell.OpenExternal("https://developer.microsoft.com/microsoft-edge/webview2/"); err != nil {
+				b.status = "Runtimeの案内を開けませんでした。"
+			}
+		}
 	})
 }
 

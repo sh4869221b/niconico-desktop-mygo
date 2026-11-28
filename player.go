@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/url"
 	"strings"
 	"time"
 
@@ -143,6 +144,28 @@ func (d *playerDocument) acceptTitle(revision uint64, video, title string) bool 
 
 func (b *browser) openPlayer(raw string) { b.openPlayerMode(raw, b.playMode) }
 
+type playbackPage interface {
+	IsLoading() bool
+	URL() string
+}
+
+// A bare watch link is a request to bring the existing video forward. Even
+// from=0 is an explicit seek request and must take the normal loading path.
+func (p *playerWindow) canFocusPlayback(route screenRoute, mode playbackMode, page playbackPage) bool {
+	if p.mode != mode || route.kind != screenVideo {
+		return false
+	}
+	u, _ := url.Parse(route.target)
+	if u.Query().Has("from") {
+		return false
+	}
+	if mode == nativePlayback {
+		return p.native != nil && (p.native.loadingStream || p.native.stream != nil) && routeFor(p.target).link == route.link
+	}
+	return page != nil && p.failedWebTarget == "" && !p.replaceFailedWebView && p.document.loaded && !p.document.loading &&
+		!page.IsLoading() && routeFor(page.URL()).link == route.link
+}
+
 func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 	if mode != nativePlayback {
 		mode = webPlayback
@@ -158,6 +181,17 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 	go mygo.RunOnMain(func() {
 		if b.closed || b.playbackRequest != request {
 			return
+		}
+		if p := b.player; p != nil {
+			var page playbackPage
+			if mode == webPlayback && p.view != nil {
+				page = p.view.Page()
+			}
+			if p.canFocusPlayback(route, mode, page) {
+				p.win.Show()
+				p.win.Focus()
+				return
+			}
 		}
 		if p := b.player; p != nil && p.mode != mode {
 			b.player = nil

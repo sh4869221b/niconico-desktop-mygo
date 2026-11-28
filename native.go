@@ -42,6 +42,11 @@ func (b *browser) navigate(link string) {
 	if allowedURL(link) == nil {
 		return
 	}
+	if link == login {
+		b.loginHelp = true
+		return
+	}
+	b.loginHelp = false
 	r := routeFor(link)
 	if r.kind == screenVideo {
 		b.rememberVideoDetails(r)
@@ -54,6 +59,7 @@ func (b *browser) navigate(link string) {
 }
 
 func (b *browser) openNative(r screenRoute, add bool) {
+	b.loginHelp = false
 	b.showSearchRoute(r)
 	if b.official {
 		b.closeOfficial()
@@ -178,6 +184,7 @@ func (b *browser) playOfficialLink(view *mygo.WebView, raw string, alreadyNaviga
 }
 
 func (b *browser) openOfficial(target string) {
+	b.loginHelp = false
 	if allowedURL(target) == nil || b.closed {
 		return
 	}
@@ -204,6 +211,7 @@ func (b *browser) openOfficial(target string) {
 
 func (b *browser) closeOfficial() {
 	view := b.web
+	b.loginHelp = false
 	b.web, b.official, b.loaded = nil, false, false
 	b.source, b.status = "", ""
 	if view != nil {
@@ -292,7 +300,7 @@ func (b *browser) drawNative(c *ui.Context) {
 				}
 			case screenOwnLists, screenOwnList:
 				if errors.Is(b.resultErr, errSignIn) && ui.PrimaryButton(scope, "ニコニコにログイン").Clicked() {
-					b.openOfficial(login)
+					b.navigate(login)
 				}
 				if r.kind == screenOwnList && ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
