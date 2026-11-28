@@ -42,6 +42,8 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	retryAt               time.Duration
+	retryPaused           bool
 	showKeys              bool
 	displayPending        bool
 
@@ -74,12 +76,13 @@ func (p *playerWindow) stopNative() {
 }
 
 func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
+	b.loadNativePlayerAt(p, route, route.startTime(), false)
+}
+
+func (b *browser) loadNativePlayerAt(p *playerWindow, route screenRoute, at time.Duration, paused bool) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &nativePlayer{
-		descriptionSource: route.target, cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
-		showComments: true, displayPending: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
-	}
+	n := newNativeAttempt(route, at, paused, cancel)
 	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
 	p.win.Invalidate()
@@ -139,7 +142,25 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	}()
 }
 
+func newNativeAttempt(route screenRoute, at time.Duration, paused bool, cancel context.CancelFunc) *nativePlayer {
+	return &nativePlayer{
+		descriptionSource: route.target, cancel: cancel, loadingStream: true, status: "配信を準備しています…",
+		startAt: at, retryAt: at, pauseRequested: paused,
+		showComments: true, displayPending: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
+	}
+}
+
 func (n *nativePlayer) failStream(message string) {
+	if n.startAt > 0 {
+		n.retryAt = n.startAt
+	}
+	n.retryPaused = n.pauseRequested
+	if n.stream != nil {
+		n.retryPaused = n.stream.Paused()
+		if n.stream.Ready() && !n.stream.Preparing() && n.stream.Err() == nil {
+			n.retryAt = n.stream.Position()
+		}
+	}
 	if n.relay != nil {
 		if reason := n.relay.lastFailure.Load(); reason != nil {
 			message += " 中継で記録した直近のエラーは「" + *reason + "」です。"
@@ -151,7 +172,7 @@ func (n *nativePlayer) failStream(message string) {
 		n.stream.Close()
 		n.stream = nil
 	}
-	n.status = message + " 公式 WebView で開き直してください。"
+	n.status = message + " 同じモードで再試行するか、公式 WebView で開き直してください。"
 }
 
 func nativeDecoderFailure(message string, err error) string {
@@ -293,7 +314,14 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		}
 		if s == nil {
 			ui.Column(c).Grow(1).FillWidth().Padding(20).Justify(ui.Center).Children(func() {
-				ui.Text(c, n.status).Wrap()
+				ui.Text(c, n.status).Role(ui.RoleStatus).Wrap()
+				if !n.loadingStream && ui.Button(c, "独自プレーヤーで再試行").Clicked() {
+					go mygo.RunOnMain(func() {
+						if !b.closed && b.player == p && p.native == n {
+							b.loadNativePlayerAt(p, routeFor(p.target), n.retryAt, n.retryPaused)
+						}
+					})
+				}
 			})
 			return
 		}
@@ -310,6 +338,9 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 		}
 		current := s.Position()
+		if s.Ready() && !s.Preparing() {
+			n.retryAt = current
+		}
 		compact := w < 780
 		var body ui.Element
 		if compact {
@@ -351,7 +382,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					s.Seek(time.Duration(seconds * float64(time.Second)))
 					n.follow.positioned = false
 				}
-				ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackTime(duration))
+				ui.Text(c, formatPlaybackTime(current)+" / "+formatPlaybackDuration(duration))
 				volume := s.Volume() * 100
 				if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
 					b.nativeVolume = volume
@@ -409,6 +440,26 @@ func (b *browser) toggleNativeMute(s *ui.VideoPlayer) {
 	s.SetMuted(!s.Muted())
 	b.nativeMuted = s.Muted()
 	b.saveNativeAudio()
+}
+
+func nativeWaitStatus(ready, preparing, buffering bool) string {
+	if !ready {
+		return "デコーダーを起動し、最初の映像を待っています…"
+	}
+	if preparing {
+		return "最初の映像の表示を待っています…"
+	}
+	if buffering {
+		return "再バッファ中です…"
+	}
+	return ""
+}
+
+func formatPlaybackDuration(d time.Duration) string {
+	if d <= 0 {
+		return "—"
+	}
+	return formatPlaybackTime(d)
 }
 
 func toggleNativePlayback(s *ui.VideoPlayer) {
@@ -480,8 +531,9 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 						b.browseInMain(target)
 					}
 				}
-				if s := n.stream; !s.Ready() || s.Preparing() || s.Buffering() {
-					ui.Text(c, "配信を読み込んでいます…").Wrap()
+				s := n.stream
+				if status := nativeWaitStatus(s.Ready(), s.Preparing(), s.Buffering()); status != "" {
+					ui.Text(c, status).Role(ui.RoleStatus).Wrap()
 				}
 			})
 			if n.tagNotice != "" {
