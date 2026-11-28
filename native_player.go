@@ -30,6 +30,7 @@ type nativePlayer struct {
 	hideCommentPanel      bool
 	showOverview          bool
 	description           []descriptionPart
+	descriptionSource     string
 	publisher             videoPublisher
 	allComments           []timedComment
 	allCues               []danmakuCue
@@ -67,7 +68,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &nativePlayer{
-		cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
+		descriptionSource: route.target, cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
 		showComments: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
 	}
 	p.native, p.target = n, route.target
@@ -435,7 +436,7 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 				if len(n.description) == 0 {
 					ui.Text(c, "概要はありません。").Wrap()
 				} else {
-					b.drawDescription(c, n.description)
+					b.drawDescription(c, n.description, n.descriptionSource)
 				}
 			})
 		})
