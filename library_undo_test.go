@@ -154,6 +154,10 @@ func TestLibraryUndoPersistsAfterStorageRecovers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(latest.History) != 3 || latest.History[0].LastViewedAt.IsZero() {
+		t.Fatalf("new history visit is missing its date: %+v", latest.History)
+	}
+	c.LastViewedAt = latest.History[0].LastViewedAt
 	if want := []entry{c, a, bEntry}; len(b.pendingLibraryEdits) != 0 || !slices.Equal(latest.History, want) {
 		t.Fatalf("persisted history: %+v, want %+v", latest.History, want)
 	}

@@ -74,8 +74,14 @@ func TestPlayerRepairsPinTitleWithUnchangedOrSuppressedHistory(t *testing.T) {
 		if err != nil || len(got.Pins) != 1 || got.Pins[0].Title != title {
 			t.Fatalf("suppressed=%v saved pin: %+v (%v)", suppressed, got.Pins, err)
 		}
-		if suppressed && len(got.History) != 0 || !suppressed && (len(got.History) != 1 || got.History[0] != known) {
+		if suppressed && len(got.History) != 0 || !suppressed && len(got.History) != 1 {
 			t.Fatalf("unrelated history changed: %+v", got.History)
+		}
+		if !suppressed {
+			known.LastViewedAt = got.History[0].LastViewedAt
+			if known.LastViewedAt.IsZero() || got.History[0] != known {
+				t.Fatalf("legacy history did not acquire a date: %+v", got.History)
+			}
 		}
 	}
 }

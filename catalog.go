@@ -219,12 +219,17 @@ func (r screenRoute) withPage(page int) screenRoute {
 }
 
 func (r screenRoute) startTime() time.Duration {
+	d, _ := r.explicitStartTime()
+	return d
+}
+
+func (r screenRoute) explicitStartTime() (time.Duration, bool) {
 	u, _ := url.Parse(r.target)
 	seconds, err := strconv.ParseUint(u.Query().Get("from"), 10, 64)
 	if err != nil || seconds > uint64((1<<63-1)/time.Second) {
-		return 0
+		return 0, false
 	}
-	return time.Duration(seconds) * time.Second
+	return time.Duration(seconds) * time.Second, true
 }
 
 type card struct {
