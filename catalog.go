@@ -22,6 +22,9 @@ const publicMylistPageSize = 100
 const maxCatalogPage = 4166 // zero based, preserves the accepted range of existing browse links
 const responseLimit = 4 << 20
 
+var errSessionUnavailable = errors.New("ログイン情報を確認できません。ログイン状態を再確認してください")
+var errAccessDenied = errors.New("この一覧を閲覧する権限がありません。アカウントと公開設定を確認してください")
+
 var errSignIn = errors.New("ニコニコへのログインが必要です")
 var watchSegment = regexp.MustCompile(`^(?:(?:sm|nm|so)?[0-9]{1,20})$`)
 
@@ -227,6 +230,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	sortMetrics                                       map[string]string
 	masked                                            bool
 }
 
@@ -299,8 +303,8 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 			return nil, errSignIn
 		}
 		cookie, err := c.session(target.String())
-		if path == accountStatusPath && err != nil && !errors.Is(err, errSignIn) {
-			return nil, err
+		if err != nil && !errors.Is(err, errSignIn) {
+			return nil, errSessionUnavailable
 		}
 		if err != nil || cookie == nil || cookie.Name != "user_session" || !cookie.Secure ||
 			cookie.Value == "" || cookie.Valid() != nil {
@@ -314,8 +318,11 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		if private && (res.StatusCode == 401 || res.StatusCode == 403 && path != accountStatusPath) {
+		if private && res.StatusCode == 401 {
 			return nil, errSignIn
+		}
+		if private && res.StatusCode == 403 && path != accountStatusPath {
+			return nil, errAccessDenied
 		}
 		return nil, catalogHTTPStatus(res.StatusCode)
 	}
@@ -364,7 +371,7 @@ func searchParameters(r screenRoute) url.Values {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
-		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId"},
+		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId,startTime,lastCommentTime,likeCounter,mylistCounter"},
 		"_sort":  {direction + sort.snapshotKey}, "_limit": {strconv.Itoa(searchPageSize)}, "_offset": {strconv.Itoa(r.page * searchPageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
@@ -392,6 +399,8 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	}
 	type row struct {
 		ContentID, Title, ThumbnailURL             string
+		StartTime, LastCommentTime                 string
+		LikeCounter, MylistCounter                 *int
 		LengthSeconds, ViewCounter, CommentCounter *int
 		Tags                                       json.RawMessage
 		UserID, ChannelID                          json.RawMessage
@@ -411,6 +420,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	for _, item := range result.Data {
 		if v, ok := makeOptionalVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
+			v.sortMetrics = searchMetrics(item.StartTime, item.LastCommentTime, item.LikeCounter, item.MylistCounter)
 			v.tags = searchVideoTags(item.Tags)
 			v.owner = (publisherMetadata{ID: item.ChannelID}).publisher("channel").videos
 			if v.owner == "" {
@@ -423,13 +433,17 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 }
 
 type apiVideo struct {
-	ID, Title               string
-	Duration                *int
-	Count                   struct{ View, Comment *int }
-	Owner                   publisherMetadata
-	Tag, Tags               json.RawMessage
-	Thumbnail               struct{ URL, MiddleURL, ListingURL string }
-	RequireSensitiveMasking bool
+	ID, Title string
+	Duration  *int
+	Count     struct {
+		View, Comment *int
+		Like, Mylist  *int
+	}
+	RegisteredAt, LastCommentTime string
+	Owner                         publisherMetadata
+	Tag, Tags                     json.RawMessage
+	Thumbnail                     struct{ URL, MiddleURL, ListingURL string }
+	RequireSensitiveMasking       bool
 }
 
 func (v apiVideo) thumbnailURL() string {
@@ -446,6 +460,7 @@ func (v apiVideo) thumbnailURL() string {
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeOptionalVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
 	x.thumbnail = v.thumbnailURL()
+	x.sortMetrics = searchMetrics(v.RegisteredAt, v.LastCommentTime, v.Count.Like, v.Count.Mylist)
 	x.masked = v.RequireSensitiveMasking
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
@@ -539,6 +554,14 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 			}
 		}
 	}](data)
+	if err == nil && private {
+		if result.Meta.Status == 401 {
+			return p, errSignIn
+		}
+		if result.Meta.Status == 403 {
+			return p, errAccessDenied
+		}
+	}
 	if err != nil || result.Meta.Status != 200 {
 		return p, errors.New("一覧を取得できませんでした")
 	}
