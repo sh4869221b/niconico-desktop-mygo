@@ -17,6 +17,36 @@ func TestDescriptionTagAndSearchDestinations(t *testing.T) {
 		}
 	}
 }
+func TestDescriptionSearchPunctuation(t *testing.T) {
+	for _, tc := range []struct{ mode, term, prose string }{
+		{"tag", "U.S.A.", "U.S.A"},
+		{"search", "速報!", "速報"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			// Keep the punctuation literal in the HTML and prose URL.
+			target := home + tc.mode + "/" + tc.term
+			_, links, parts := plainDescription(`<a href="` + target + `">作品を探す</a>`)
+			if len(links) != 1 || links[0].link != target {
+				t.Fatalf("explicit destination changed: %#v, want %q", links, target)
+			}
+			b := &browser{index: -1, closed: true}
+			view := ui.NewTester(func(c *ui.Context) { b.drawDescription(c, parts) }, 900, 300)
+			view.Key(0, ui.KeyTab)
+			if !view.Focused("作品を探す") {
+				t.Fatal("explicit search link could not be focused")
+			}
+			view.Key(0, ui.KeyEnter)
+			if b.index < 0 || b.navigation[b.index].key != tc.term || b.searchInput.byTag != (tc.mode == "tag") {
+				t.Fatalf("click selected the wrong search: %+v", b.navigation)
+			}
+			_, bare, _ := plainDescription("参照: " + target)
+			if len(bare) != 1 || routeFor(bare[0].link).key != tc.prose {
+				t.Fatalf("bare link kept prose punctuation: %#v", bare)
+			}
+		})
+	}
+}
+
 func TestDescriptionExternalDestinationIsExplicitCopy(t *testing.T) {
 	_, _, parts := plainDescription(`<a href="https://example.invalid/path?q=1">作者のサイト</a>`)
 	b := &browser{index: -1, closed: true}

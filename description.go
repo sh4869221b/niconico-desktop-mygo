@@ -21,7 +21,6 @@ type descriptionPart struct {
 }
 
 func descriptionLink(raw string) (card, string) {
-	raw = strings.TrimRight(raw, "。．、！？：；,.)]}!?;）】」")
 	lower := strings.ToLower(raw)
 	switch {
 	case strings.HasPrefix(lower, "http://"):
