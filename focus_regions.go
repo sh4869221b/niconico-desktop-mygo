@@ -11,6 +11,10 @@ func (b *browser) focusRegionShortcut(c *ui.Context) {
 		b.searchFocus.Focus(c)
 		return
 	}
+	if b.libraryExpanded && (b.libraryRegion.FocusWithin(c) && !back || !b.libraryRegion.FocusWithin(c) && back) {
+		b.focusResults(c)
+		return
+	}
 	if b.contentRegion.FocusWithin(c) {
 		if back && b.showLibrary {
 			b.libraryFocus.Focus(c)
@@ -28,4 +32,13 @@ func (b *browser) focusRegionShortcut(c *ui.Context) {
 	} else {
 		b.libraryFocus.Focus(c)
 	}
+}
+
+func (b *browser) focusResults(c *ui.Context) {
+	if b.libraryExpanded {
+		b.libraryExpanded = false
+		b.focusContent = true
+		return
+	}
+	b.contentFocus.Focus(c)
 }
