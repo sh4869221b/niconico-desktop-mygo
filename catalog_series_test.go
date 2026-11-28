@@ -93,7 +93,7 @@ func TestSeriesLoadPagesAndPlayThroughCatalog(t *testing.T) {
 			if q.Get("pageSize") != "100" || (q.Get("page") != "1" && q.Get("page") != "2") {
 				t.Fatalf("video page request: %v", q)
 			}
-			return testResponse(200, `{"meta":{"status":200},"data":{"totalCount":101,"detail":{"title":"シリーズのタイトル","owner":{"id":123,"name":"投稿者名"}},"items":[{"video":{"id":"sm9","title":"シリーズの動画","duration":81}}]}}`), nil
+			return testResponse(200, `{"meta":{"status":200},"data":{"totalCount":101,"detail":{"title":"シリーズのタイトル","owner":{"id":123,"name":"投稿者名"}},"items":[{"video":{"id":"sm9","title":"シリーズの動画","duration":81}},{"video":{}}]}}`), nil
 		default:
 			t.Fatalf("unexpected request: %s", r.URL.Path)
 			return nil, nil
@@ -138,7 +138,7 @@ func TestSeriesLoadPagesAndPlayThroughCatalog(t *testing.T) {
 		t.Fatalf("wrong series route: %+v", detail)
 	}
 	page, err := c.load(t.Context(), detail)
-	if err != nil || len(page.items) != 1 || !page.more || page.publisher.name != "投稿者名" {
+	if err != nil || len(page.items) != 2 || page.items[1].link != "" || !page.more || page.publisher.name != "投稿者名" {
 		t.Fatalf("series video page: %+v, %v", page, err)
 	}
 	b.result = page
