@@ -31,6 +31,7 @@ type browser struct {
 	pendingLibraryEdits          []func(*library) bool
 	history, loaded, closed      bool
 	showLibrary                  bool
+	undoRemoval                  *libraryRemoval
 	layoutPath                   string
 	layoutLoadErr                error
 	focusSearch                  bool
@@ -424,34 +425,6 @@ func (b *browser) pinCurrent() {
 	}
 }
 
-func (b *browser) remove(e entry) {
-	if b.storeWarning != "" {
-		b.status = b.storeWarning
-		return
-	}
-	history := b.history
-	if history {
-		if p := b.player; p != nil {
-			if p.historySuppressed == nil {
-				p.historySuppressed = make(map[string]bool)
-			}
-			p.historySuppressed[e.URL] = true
-		}
-	}
-	_, saved := b.changeLibrary(func(data *library) bool {
-		items := &data.Pins
-		if history {
-			items = &data.History
-		}
-		before := len(*items)
-		*items = slices.DeleteFunc(*items, func(x entry) bool { return x.URL == e.URL })
-		return len(*items) != before
-	})
-	if saved {
-		b.status = "選択した項目を削除しました。"
-	}
-}
-
 func (b *browser) copyCurrent() {
 	target := goNicoListURL(b.current())
 	if target == "" {
@@ -498,8 +471,11 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		if b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+		if b.undoRemoval != nil || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
 			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
+				if b.undoRemoval != nil && ui.Button(c, "元に戻す").Clicked() {
+					b.undoLibraryRemoval()
+				}
 				if b.status != "" {
 					ui.Text(c, b.status).TextColor(t.TextMuted).Wrap()
 				}
@@ -650,7 +626,7 @@ func (b *browser) sidebar(c *ui.Context) {
 						if ui.Button(row, "["+item.Kind+"] "+item.Title).Tooltip(item.Title).Grow(1).MinWidth(0).Clicked() {
 							b.navigate(item.openURL())
 						}
-						if ui.Button(row, "×").Label("削除").Clicked() {
+						if ui.Button(row, "×").Label(libraryDeleteLabel(item, b.history)).Clicked() {
 							b.remove(item)
 							return
 						}
