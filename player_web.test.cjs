@@ -229,6 +229,10 @@ test('history snapshot carries verified duration and completion without changing
     const p = player();
     assert.deepEqual(p.historySnapshot(), [a, 'sm9', 60, true, 172, false]);
     assert.deepEqual(p.snapshot(), [a, 'sm9', 60, true]);
+    p.video.seeking = true;
+    p.video.currentTime = 160;
+    assert.deepEqual(p.historySnapshot(), [a, 'sm9', 60, true, 172, false]);
+    p.video.seeking = false;
     p.video.currentTime = 172;
     p.video.ended = true;
     assert.deepEqual(p.historySnapshot(), [a, 'sm9', 172, true, 172, true]);

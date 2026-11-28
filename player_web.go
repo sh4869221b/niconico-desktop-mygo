@@ -80,7 +80,7 @@ func (p *playerWindow) captureWebPosition(page *mygo.Page) {
 	played, id, position := p.playedWatch, p.playedVideo, p.playedPosition
 	ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
 	defer cancel()
-	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.historySnapshot?.() ?? window.__nicoDesktopMedia?.snapshot() ?? null`)
+	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.historySnapshot() ?? null`)
 	if err == nil && p.view != nil && p.playedWatch == played && p.playedVideo == id && p.playedPosition == position &&
 		p.document.revision == revision && page.URL() == source {
 		p.recordWebSnapshot(value, routeFor(source))

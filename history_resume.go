@@ -1,11 +1,12 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
 	"math"
 	"net/url"
 	"slices"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 const historyProgressInterval = 15 * time.Second
@@ -14,7 +15,6 @@ func validHistorySeconds(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value < 1<<33
 }
 func copyHistoryProgress(e, old entry) entry {
-	e.LastViewedAt = old.LastViewedAt
 	if old.PositionKnown && validHistorySeconds(old.PositionSeconds) && validHistorySeconds(old.DurationSeconds) {
 		e.PositionKnown = true
 		e.PositionSeconds = old.PositionSeconds
@@ -24,7 +24,7 @@ func copyHistoryProgress(e, old entry) entry {
 	return e
 }
 func historyPlaybackURL(e entry, resume bool) string {
-	r := routeFor(e.URL)
+	r := routeFor(e.openURL())
 	if r.kind != screenVideo {
 		return ""
 	}
@@ -41,18 +41,17 @@ func historyPlaybackURL(e entry, resume bool) string {
 	return r.link
 }
 func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force bool) {
-	if b.player != p || b.storeWarning != "" {
+	if p == nil || b.player != p || b.storeWarning != "" {
 		return
 	}
 	raw, seconds, duration, completed := "", float64(0), float64(0), false
+	var stream *ui.VideoPlayer
 	if n := p.native; n != nil {
-		if n.stream == nil || !n.stream.Ready() || n.stream.Preparing() || n.stream.Err() != nil {
+		stream = n.stream
+		if stream == nil || !stream.Ready() || stream.Preparing() || stream.Err() != nil {
 			return
 		}
-		raw = p.target
-		seconds = n.stream.Position().Seconds()
-		duration = n.stream.Duration().Seconds()
-		completed = n.stream.Ended()
+		raw, completed = p.target, stream.Ended()
 	} else {
 		if p.restoring != nil || p.playedPosition == nil || p.playedVideo == "" {
 			return
@@ -63,22 +62,40 @@ func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force b
 		completed = p.playedPosition.ended
 	}
 	key, kind := canonical(raw)
-	if kind != "動画" || p.historySuppressed[key] || !validHistorySeconds(seconds) || !validHistorySeconds(duration) {
+	visit := p.historyVisitAt
+	if kind != "動画" || key != p.historyVisitURL || visit.IsZero() || p.historySuppressed[key] {
 		return
 	}
-	i := slices.IndexFunc(b.data.History, func(e entry) bool { return e.URL == key })
-	if i < 0 {
-		return
-	} // A deleted row must never be re-created by a position sample.
-	if !force && p.lastHistoryVideo == key && !p.lastHistoryWrite.IsZero() && now.Sub(p.lastHistoryWrite) < historyProgressInterval {
+	if !force && p.lastHistoryCompleted == completed && !p.lastHistoryWrite.IsZero() && now.Sub(p.lastHistoryWrite) < historyProgressInterval {
 		return
 	}
-	p.lastHistoryWrite, p.lastHistoryVideo = now, key
-	e := &b.data.History[i]
-	e.PositionKnown, e.PositionSeconds, e.DurationSeconds, e.Completed = true, seconds, duration, completed
-	e.LastViewedAt = now.UTC()
-	b.persist()
-	if b.win != nil {
+	if stream != nil {
+		position, confirmed := stream.ConfirmedPosition()
+		if !confirmed {
+			return
+		}
+		seconds, duration = position.Seconds(), stream.Duration().Seconds()
+	}
+	if !validHistorySeconds(seconds) || !validHistorySeconds(duration) {
+		return
+	}
+	p.lastHistoryWrite, p.lastHistoryCompleted = now, completed
+	changed, _ := b.changeLibrary(func(data *library) bool {
+		if p.historySuppressed[key] || !b.canRecordHistory() {
+			return false
+		}
+		i := slices.IndexFunc(data.History, func(e entry) bool { return e.URL == key && e.LastViewedAt.Equal(visit) })
+		if i < 0 {
+			return false
+		}
+		e := &data.History[i]
+		if e.PositionKnown && e.PositionSeconds == seconds && e.DurationSeconds == duration && e.Completed == completed {
+			return false
+		}
+		e.PositionKnown, e.PositionSeconds, e.DurationSeconds, e.Completed = true, seconds, duration, completed
+		return true
+	})
+	if changed && b.win != nil {
 		b.win.Invalidate()
 	}
 }

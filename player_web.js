@@ -111,7 +111,9 @@
         if (video && (!target || target === video) && Number.isFinite(video.currentTime) && video.currentTime >= 0) {
             const url = entryURL === location.href ? targetURL : location.href;
             lastSample = [url, media.id, video.currentTime, video.paused || video.ended];
-            lastHistorySample = [...lastSample, Number.isFinite(video.duration) && video.duration >= 0 ? video.duration : 0, Boolean(video.ended)];
+            if (!video.seeking && Number.isFinite(video.duration) && video.duration >= 0) {
+                lastHistorySample = [...lastSample, video.duration, Boolean(video.ended)];
+            }
         }
     }
 
