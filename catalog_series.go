@@ -118,6 +118,8 @@ func (c catalog) series(ctx context.Context, r screenRoute) (catalogPage, error)
 	for _, entry := range data.Items {
 		if item, ok := entry.Video.card(); ok {
 			page.items = append(page.items, item)
+		} else {
+			page.items = append(page.items, unavailableVideo())
 		}
 	}
 	return page, nil

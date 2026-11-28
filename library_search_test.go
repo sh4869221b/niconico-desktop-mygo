@@ -1,8 +1,10 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
+	"fmt"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestLibraryOffersSearchAndWideView(t *testing.T) {
@@ -16,6 +18,60 @@ func TestLibraryOffersSearchAndWideView(t *testing.T) {
 	}
 	if _, ok := v.Find("通常表示に戻る"); !ok {
 		t.Fatal("wide library view not offered")
+	}
+}
+
+func TestExpandedLibraryRevealsToolbarDestinations(t *testing.T) {
+	for _, tc := range []struct {
+		label string
+		want  screenKind
+	}{
+		{"検索", screenSearch}, {"ホーム", screenHome}, {"マイリスト", screenOwnLists}, {"ログイン", screenHome},
+	} {
+		t.Run(tc.label, func(t *testing.T) {
+			b := &browser{index: -1, closed: true, showLibrary: true, closeHelpAcknowledged: true}
+			b.navigate(home)
+			b.searchInput.field = "検索対象"
+			b.libraryExpanded = true
+			v := ui.NewTester(b.draw, 1260, 850)
+			if err := v.Click(tc.label); err != nil {
+				t.Fatal(err)
+			}
+			if b.libraryExpanded || b.navigation[b.index].kind != tc.want || b.loginHelp != (tc.label == "ログイン") {
+				t.Fatalf("destination was hidden: expanded=%v route=%v login=%v", b.libraryExpanded, b.navigation[b.index], b.loginHelp)
+			}
+		})
+	}
+}
+
+func TestLibraryFilterRestartsTheScrollPosition(t *testing.T) {
+	b := &browser{index: -1, closed: true, showLibrary: true, libraryExpanded: true, closeHelpAcknowledged: true}
+	for i := range 100 {
+		item, _ := makeEntry(fmt.Sprintf("%swatch/sm%d", home, i+100), fmt.Sprintf("対象 %03d", i))
+		b.data.Pins = append(b.data.Pins, item)
+	}
+	first := libraryEntryLabel(b.data.Pins[0], false)
+	later := libraryEntryLabel(b.data.Pins[20], false)
+	v := ui.NewTester(b.draw, 1260, 850)
+	start, ok := v.Access(first)
+	if !ok || start.Offscreen {
+		t.Fatal("missing first saved item")
+	}
+	for range 3 {
+		v.Scroll(start.Bounds.X+20, start.Bounds.Y+10, 0, 370)
+	}
+	passed, _ := v.Access(first)
+	shown, _ := v.Access(later)
+	if !passed.Offscreen || shown.Offscreen {
+		t.Fatalf("test did not scroll the library: first=%+v later=%+v", passed, shown)
+	}
+	if err := v.Click("ライブラリ内を検索"); err != nil {
+		t.Fatal(err)
+	}
+	v.Type("対象")
+	fresh, ok := v.Access(first)
+	if !ok || fresh.Offscreen || fresh.Bounds.Y < start.Bounds.Y-4 || fresh.Bounds.Y > start.Bounds.Y+4 {
+		t.Fatalf("new filter inherited the old offset: first row %+v, want y=%v", fresh, start.Bounds.Y)
 	}
 }
 

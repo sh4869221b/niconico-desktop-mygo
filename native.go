@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,7 +42,16 @@ func (b *browser) navigate(link string) {
 	if allowedURL(link) == nil {
 		return
 	}
+	b.libraryExpanded = false
+	if link == login {
+		b.loginHelp = true
+		return
+	}
+	b.loginHelp = false
 	r := routeFor(link)
+	if r.kind == screenVideo {
+		b.rememberVideoDetails(r)
+	}
 	if r.kind == screenOfficial {
 		b.openOfficial(link)
 		return
@@ -50,14 +60,24 @@ func (b *browser) navigate(link string) {
 }
 
 func (b *browser) openNative(r screenRoute, add bool) {
+	b.libraryExpanded = false
+	b.loginHelp = false
+	b.showSearchRoute(r)
 	if b.official {
 		b.closeOfficial()
 	}
 	if add && (b.index == -1 || b.navigation[b.index] != r) {
+		if b.index >= 0 {
+			b.nativeVisit()
+		}
 		b.navigation = append(b.navigation[:b.index+1], r)
+		clear(b.nativeVisits[b.index+1:])
+		b.nativeVisits = append(b.nativeVisits[:b.index+1], nil)
 		b.index++
 		if len(b.navigation) > 100 {
 			b.navigation = b.navigation[1:]
+			b.nativeVisits[0] = nil
+			b.nativeVisits = b.nativeVisits[1:]
 			b.index--
 		}
 	}
@@ -67,7 +87,19 @@ func (b *browser) openNative(r screenRoute, add bool) {
 func (b *browser) moveNative(delta int) {
 	next := b.index + delta
 	if next >= 0 && next < len(b.navigation) {
+		b.libraryExpanded = false
 		b.index = next
+		b.showSearchRoute(b.navigation[next])
+		visit := b.nativeVisit()
+		visit.restoreFocus = visit.focusLink != ""
+		if visit.hasPage {
+			b.cancelLoad()
+			b.result, b.resultErr, b.busy, b.status = visit.page, nil, false, visit.page.searchMode
+			if b.win != nil {
+				b.win.Invalidate()
+			}
+			return
+		}
 		b.refreshNative()
 	}
 }
@@ -99,6 +131,7 @@ func (b *browser) refreshNative() {
 		return
 	}
 	r, epoch := b.navigation[b.index], b.epoch
+	fallback := b.knownVideoDetails[r.link]
 	b.result, b.resultErr, b.busy, b.status = catalogPage{}, nil, r.kind != screenHome, ""
 	if !b.busy {
 		b.win.Invalidate()
@@ -109,12 +142,18 @@ func (b *browser) refreshNative() {
 	go func() {
 		defer cancel()
 		p, err := b.catalog.load(ctx, r)
+		if r.kind == screenVideo {
+			p.details = p.details.withFallback(fallback)
+		}
 		mygo.RunOnMain(func() {
 			if b.closed || b.official || b.epoch != epoch {
 				return
 			}
-			b.result, b.resultErr, b.busy = p, err, false
-			b.status = p.searchMode
+			b.applyCatalogContext(r, &p)
+			b.presentNativeResult(p, err)
+			if err == nil {
+				b.updatePinTitle(r.target, b.currentTitle())
+			}
 			b.win.Invalidate()
 		})
 	}()
@@ -151,6 +190,8 @@ func (b *browser) playOfficialLink(view *mygo.WebView, raw string, alreadyNaviga
 }
 
 func (b *browser) openOfficial(target string) {
+	b.libraryExpanded = false
+	b.loginHelp = false
 	if allowedURL(target) == nil || b.closed {
 		return
 	}
@@ -159,6 +200,7 @@ func (b *browser) openOfficial(target string) {
 		return
 	}
 	b.cancelLoad()
+	b.showSearchRoute(routeFor(target))
 	b.official, b.officialTarget = true, target
 	b.loading()
 	b.win.Invalidate()
@@ -176,6 +218,7 @@ func (b *browser) openOfficial(target string) {
 
 func (b *browser) closeOfficial() {
 	view := b.web
+	b.loginHelp = false
 	b.web, b.official, b.loaded = nil, false, false
 	b.source, b.status = "", ""
 	if view != nil {
@@ -186,7 +229,11 @@ func (b *browser) closeOfficial() {
 }
 
 func (b *browser) leaveOfficial() {
+	b.libraryExpanded = false
 	b.closeOfficial()
+	if b.index >= 0 {
+		b.showSearchRoute(b.navigation[b.index])
+	}
 	b.refreshNative()
 }
 
@@ -199,9 +246,14 @@ func (b *browser) drawNative(c *ui.Context) {
 	epoch := b.epoch
 	// Keep the controls in the same focus scope while changing sort or page.
 	scope := c.Key(r.kind).Key(r.key)
-	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
+	ui.Column(scope).Bind(&b.contentRegion).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
 		if r.kind == screenHome {
-			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
+			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold().Focusable().Bind(&b.contentFocus)
+			ui.Text(scope, "ログインせずに動画を検索できます。上の入力欄にキーワードやタグを入力してください。").Wrap()
+			if ui.PrimaryButton(scope, "例：初音ミクを検索欄に入れる").Clicked() {
+				b.searchInput.field, b.focusSearch = "初音ミク", true
+			}
+			ui.Text(scope, "結果の画像は再生、タイトルは詳細を開きます。気に入ったページは「☆ 登録」で保存できます。").Wrap()
 			ui.Row(scope).Gap(8).Wrap().Children(func() {
 				if ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
@@ -223,7 +275,10 @@ func (b *browser) drawNative(c *ui.Context) {
 			_, label := canonical(r.link)
 			ui.Text(scope, label).TextColor(t.TextMuted)
 		}
-		ui.Text(scope, title).FontSize(24).Bold().Wrap()
+		ui.Text(scope, title).FontSize(24).Bold().Wrap().Focusable().Bind(&b.contentFocus)
+		if r.kind == screenVideo {
+			ui.Text(scope, videoDetailText(r, p)).Wrap().TextColor(t.TextMuted)
+		}
 		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			switch r.kind {
 			case screenSearch:
@@ -253,16 +308,23 @@ func (b *browser) drawNative(c *ui.Context) {
 				}
 			case screenOwnLists, screenOwnList:
 				if errors.Is(b.resultErr, errSignIn) && ui.PrimaryButton(scope, "ニコニコにログイン").Clicked() {
-					b.openOfficial(login)
+					b.navigate(login)
 				}
 				if r.kind == screenOwnList && ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
 				}
 			}
-			if r.kind != screenVideo && ui.Button(scope, "公式ページ").Clicked() {
+			officialLabel := "公式ページ"
+			if r.kind == screenUser || r.kind == screenList || r.kind == screenOwnList {
+				officialLabel = "公式ページで絞り込み・並べ替え"
+			}
+			if r.kind != screenVideo && ui.Button(scope, officialLabel).Clicked() {
 				b.openOfficial(r.target)
 			}
 		})
+		if notice := listSearchNotice(r.kind); notice != "" {
+			ui.Text(scope, notice).TextColor(t.TextMuted).Wrap()
+		}
 		if r.page > 0 || p.more || r.kind == screenSearch {
 			ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				if ui.Button(scope, "最初のページ").Disabled(r.page == 0).Clicked() {
@@ -272,6 +334,17 @@ func (b *browser) drawNative(c *ui.Context) {
 					b.pageNative(-1)
 				}
 				ui.Text(scope, fmt.Sprintf("%d ページ", r.page+1))
+				if r.kind == screenSearch {
+					pageControls := ui.Row(scope.Key(r.page)).Gap(4)
+					value := ui.Local(pageControls, "page number", func() string { return strconv.Itoa(r.page + 1) })
+					pageControls.Children(func() {
+						input := ui.TextInput(scope, value).Label("移動先ページ").Width(72)
+						page, valid := p.searchPageNumber(*value)
+						if ui.Button(scope, "指定ページへ").Disabled(b.busy || !valid).Clicked() || input.Submitted() && !b.busy && valid {
+							b.openNative(r.withPage(page), true)
+						}
+					})
+				}
 				if ui.Button(scope, "次へ").Disabled(b.busy || !p.more || r.page == maxCatalogPage).Clicked() {
 					b.pageNative(1)
 				}
@@ -280,11 +353,23 @@ func (b *browser) drawNative(c *ui.Context) {
 		if b.epoch != epoch {
 			return
 		}
+		if r.kind == screenSearch && !b.busy && b.resultErr == nil {
+			ui.Text(scope, p.searchRange(r)).TextColor(t.TextMuted).Wrap()
+			ui.Text(scope, searchSourceNotice(p.searchMode)).TextColor(t.TextMuted).Wrap()
+		}
 		if b.busy {
 			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
 			return
 		}
 		if b.resultErr != nil {
+			if r.kind == screenSearch {
+				ui.Text(scope, "同じ条件で「再試行」するか、「公式ページ」を開いてください。並べ替えを変更する場合は上の選択欄から選べます。").Wrap()
+			}
+			if (r.kind == screenOwnLists || r.kind == screenOwnList) && !errors.Is(b.resultErr, errSignIn) {
+				if ui.Button(scope, "ログイン状態を再確認して再取得").Disabled(b.loginBusy).Clicked() {
+					b.checkLogin()
+				}
+			}
 			ui.Text(scope, b.resultErr.Error()).Wrap()
 			if !errors.Is(b.resultErr, errSignIn) && ui.Button(scope, "再試行").Clicked() {
 				b.refreshNative()
@@ -296,9 +381,23 @@ func (b *browser) drawNative(c *ui.Context) {
 			if p.author != "" || p.summary != "" || len(p.links) > 0 {
 				introRows = 1
 			}
-			listScope := scope.Key(epoch).Key(r.page)
+			visit := b.nativeVisit()
+			listScope := scope.Key(visit)
 			pane := ui.Column(listScope).Grow(1).MinHeight(0).MinWidth(0)
-			state := ui.Local(pane, "viewport", func() ui.ListState { return ui.ListState{} })
+			state := &visit.list
+			// Links identify a row even if a refresh puts other rows above it.
+			// A duplicate link uses its occurrence, rather than sharing focus keys.
+			keys := visit.keysFor(p.items, introRows)
+			state.Key = func(i int) any { return keys[i] }
+			if visit.restoreFocus {
+				index := slices.IndexFunc(p.items, func(item card) bool { return item.link == visit.focusLink })
+				if index < 0 {
+					visit.restoreFocus = false
+				} else if visit.revealFocus {
+					state.ScrollIntoView(index + introRows)
+				}
+				visit.revealFocus = false
+			}
 			if b.thumbnails != nil {
 				first, last := state.Visible()
 				start := max(0, first-introRows)
@@ -315,7 +414,7 @@ func (b *browser) drawNative(c *ui.Context) {
 						ui.Column(listScope).FillWidth().Gap(8).Children(func() { b.drawCatalogIntro(listScope, p) })
 						return
 					}
-					b.drawCatalogItem(listScope, r.kind, p.items[i-introRows])
+					b.drawCatalogItem(listScope, r.kind, p.items[i-introRows], visit)
 				}).Grow(1).MinHeight(0).Gap(6)
 			})
 			return
@@ -356,6 +455,13 @@ func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
 			}
 		}
 	}
+	if current.urlKey == "f" || current.urlKey == "n" {
+		direction := "新しい順"
+		if ascending {
+			direction = "古い順"
+		}
+		ui.Text(scope, direction).TextColor(scope.Theme().TextMuted)
+	}
 	if b.searchSortNotice != "" {
 		ui.Text(scope, b.searchSortNotice).Wrap()
 	}
@@ -385,19 +491,36 @@ func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
 	}
 }
 
-func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card) {
+func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card, visit *catalogVisit) {
 	t := scope.Theme()
+	if item.link == "" {
+		ui.Column(scope).FillWidth().Gap(4).Padding(6, 8).Background(t.Surface).Children(func() {
+			ui.Text(scope, item.title).Wrap()
+			ui.Text(scope, item.summary).TextColor(t.TextMuted).Wrap()
+		})
+		return
+	}
 	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(10).Padding(6, 8).Radius(6).Background(t.Surface).Children(func() {
 		b.drawThumbnail(scope.Key(item.link), item)
 		ui.Column(scope).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Start).Children(func() {
 			title := ui.Button(scope, "").Label(item.title).Tooltip(item.title).FillWidth().MinWidth(0).Justify(ui.Start).Children(func() {
 				ui.Text(scope, item.title).Wrap().MaxLines(2)
 			})
+			if visit.restoreFocus && visit.focusLink == item.link {
+				visit.restoreFocus = false
+				title.Focus()
+			}
 			if title.Clicked() {
+				visit.focusLink = item.link
 				b.navigate(item.link)
 			}
 			if item.summary != "" {
 				ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(t.TextMuted).FontSize(12).Wrap().MaxLines(2)
+			}
+			if b.thumbnails != nil && !item.masked && b.thumbnails.failed(item.thumbnail) {
+				if ui.Button(scope, "画像を再試行").Clicked() {
+					b.thumbnails.retry(item.thumbnail)
+				}
 			}
 			if kind == screenSearch {
 				p := videoPublisher{item.ownerName, item.owner}
@@ -411,6 +534,9 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 					}
 				} else if p.name != "" {
 					ui.Text(scope, p.name).SingleLine().Ellipsis("…").MaxWidth(240).MinWidth(0).Focusable().Tooltip(p.name)
+				}
+				if metric := item.searchMetric(b.navigation[b.index]); metric != "" {
+					ui.Text(scope, metric).TextColor(t.TextMuted).FontSize(12).Wrap()
 				}
 				b.drawVideoTags(scope, item.tags, "タグ情報なし")
 			}
@@ -461,10 +587,18 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 		Background(t.Background).Border(1, t.Border).Cursor(ui.CursorPointer)
 	press := ui.Local(button, "thumbnail press", func() thumbnailPress { return thumbnailPress{} })
 	button.HandleInput(press.input).Children(func() {
+		var img *ui.Bitmap
 		if b.thumbnails != nil {
-			if img := b.thumbnails.image(item.thumbnail); img != nil {
-				ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
-			}
+			img = b.thumbnails.image(item.thumbnail)
+		}
+		if img != nil {
+			ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
+		} else {
+			symbol, note := thumbnailFallback(item, b.thumbnails)
+			ui.Column(scope).Fill().AlignItems(ui.Center).Justify(ui.Center).IgnoreInput(true).AccessHidden(true).Children(func() {
+				ui.Text(scope, symbol).FontSize(18)
+				ui.Text(scope, note).FontSize(10).TextColor(t.TextMuted)
+			})
 		}
 	})
 	if button.Clicked() && !press.canceled {
@@ -473,5 +607,46 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 		} else {
 			b.navigate(item.link)
 		}
+	}
+}
+
+func listSearchNotice(kind screenKind) string {
+	switch kind {
+	case screenUser:
+		return "投稿日時の新しい順で、一覧全体をページごとに取得しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	case screenList:
+		return "作成者が設定した既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	case screenOwnList:
+		return "一覧の既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	}
+	return ""
+}
+
+func searchSourceNotice(mode string) string {
+	if mode == "スナップショット検索" {
+		return "スナップショット検索に切り替えました。選択した並び順を保持しています。検索インデックスの更新には時差があり、最新の結果と異なる場合があります。更新時刻は取得できません。"
+	}
+	return mode + "の結果です。結果の更新時刻は取得できません。最新の状況は公式ページでも確認できます。"
+}
+
+// Keep the known author when moving between their collections.
+func (b *browser) applyCatalogContext(r screenRoute, p *catalogPage) {
+	if r.kind != screenUser && r.kind != screenUserLists {
+		return
+	}
+	if p.publisher.name != "" {
+		if b.userNames == nil {
+			b.userNames = make(map[string]string)
+		}
+		b.userNames[r.key] = p.publisher.name
+	}
+	name := b.userNames[r.key]
+	if name == "" {
+		name = "ユーザー" + r.key
+	}
+	if r.kind == screenUserLists {
+		p.title = name + " の公開マイリスト"
+	} else {
+		p.title = name + " の投稿動画"
 	}
 }
