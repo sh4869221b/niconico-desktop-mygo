@@ -25,7 +25,7 @@ func TestLibrarySaveQueueRetriesTheHeadBeforeLaterEdits(t *testing.T) {
 	if err := os.WriteFile(path, []byte(broken), 0600); err != nil {
 		t.Fatal(err)
 	}
-	q := newLibrarySaveQueue(path)
+	q := newLibrarySaveQueue(path, nil)
 	t.Cleanup(func() { close(q.stop) })
 	s := &librarySaveSession{queue: q}
 	first, _ := makeEntry(home+"watch/sm10", "最初の名前")

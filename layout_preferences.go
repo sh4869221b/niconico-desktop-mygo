@@ -36,6 +36,7 @@ func loadSidebarVisibility(path string) (bool, error) {
 }
 
 func (b *browser) toggleLibrary() {
+	b.layoutRevision++
 	b.showLibrary = !b.showLibrary
 	if b.layoutLoadErr != nil {
 		b.reportStatus("配置設定を読み込めなかったため上書きしません。この起動中だけ変更します。")

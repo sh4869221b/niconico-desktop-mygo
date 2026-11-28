@@ -11,6 +11,12 @@ type librarySaveRequest struct {
 	// An edit owns its inputs and modifies only this transaction's snapshot.
 	// It can run more than once when a transaction fails and is retried.
 	edit func(*library) bool
+	// A settings write uses the same ordering as related library edits.
+	settings func() error
+	// committed advances state owned by the worker after the file is durable.
+	committed func()
+	// Only the UI thread calls complete, after a successful transaction.
+	complete func(changed, saved bool)
 }
 
 type librarySaveResult struct {
@@ -28,14 +34,16 @@ type librarySaveQueue struct {
 	results  chan librarySaveResult
 	retry    chan struct{}
 	stop     chan struct{}
+	notify   func()
 }
 
-func newLibrarySaveQueue(path string) *librarySaveQueue {
+func newLibrarySaveQueue(path string, notify func()) *librarySaveQueue {
 	q := &librarySaveQueue{
 		requests: make(chan librarySaveRequest, librarySaveQueueCapacity),
 		results:  make(chan librarySaveResult, librarySaveQueueCapacity),
 		retry:    make(chan struct{}, 1),
 		stop:     make(chan struct{}),
+		notify:   notify,
 	}
 	go q.run(path)
 	return q
@@ -50,14 +58,30 @@ func (q *librarySaveQueue) run(path string) {
 		case request = <-q.requests:
 		}
 		for {
-			latest, changed, err := persistLibraryEdits(path, nil, request.edit)
-			result := librarySaveResult{request: request, library: latest, changed: changed, err: err, finished: time.Now()}
+			select {
+			case <-q.stop:
+				return
+			default:
+			}
+			result := librarySaveResult{request: request}
+			if request.settings != nil {
+				result.err = request.settings()
+			} else {
+				result.library, result.changed, result.err = persistLibraryEdits(path, nil, request.edit)
+			}
+			if result.err == nil && request.committed != nil {
+				request.committed()
+			}
+			result.finished = time.Now()
 			select {
 			case <-q.stop:
 				return
 			case q.results <- result:
 			}
-			if err == nil {
+			if q.notify != nil {
+				q.notify()
+			}
+			if result.err == nil {
 				break
 			}
 			select {
@@ -134,13 +158,14 @@ func (s *librarySaveSession) finishClose(now time.Time) bool {
 	if s.closeBy.IsZero() {
 		return false
 	}
-	if s.pending == 0 {
-		s.closeBy = time.Time{}
-		return true
-	}
 	if !now.Before(s.closeBy) {
 		s.closeBy = time.Time{}
 		s.message = "保存が続いています。保存完了を確認してから閉じてください。"
+		return false
+	}
+	if s.pending == 0 {
+		s.closeBy = time.Time{}
+		return true
 	}
 	return false
 }

@@ -40,21 +40,21 @@ func historyPlaybackURL(e entry, resume bool) string {
 	}
 	return r.link
 }
-func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force bool) {
+func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force bool) bool {
 	if p == nil || b.player != p || b.storeWarning != "" {
-		return
+		return true
 	}
 	raw, seconds, duration, completed := "", float64(0), float64(0), false
 	var stream *ui.VideoPlayer
 	if n := p.native; n != nil {
 		stream = n.stream
 		if stream == nil || !stream.Ready() || stream.Preparing() || stream.Err() != nil {
-			return
+			return true
 		}
 		raw, completed = p.target, stream.Ended()
 	} else {
 		if p.restoring != nil || p.playedPosition == nil || p.playedVideo == "" {
-			return
+			return true
 		}
 		raw = p.playedWatch.link
 		seconds = p.playedPosition.seconds
@@ -63,28 +63,37 @@ func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force b
 	}
 	key, kind := canonical(raw)
 	visit := p.historyVisitAt
-	if kind != "動画" || key != p.historyVisitURL || visit.IsZero() || p.historySuppressed[key] {
-		return
+	queuedVisit := p.queuedHistoryVisit
+	if kind != "動画" || key != p.historyVisitURL || (visit.IsZero() && queuedVisit == nil) || p.historySuppressed[key] {
+		return true
 	}
 	if !force && p.lastHistoryCompleted == completed && !p.lastHistoryWrite.IsZero() && now.Sub(p.lastHistoryWrite) < historyProgressInterval {
-		return
+		return true
 	}
 	if stream != nil {
 		position, confirmed := stream.ConfirmedPosition()
 		if !confirmed {
-			return
+			return true
 		}
 		seconds, duration = position.Seconds(), stream.Duration().Seconds()
 	}
 	if !validHistorySeconds(seconds) || !validHistorySeconds(duration) {
-		return
+		return true
 	}
-	p.lastHistoryWrite, p.lastHistoryCompleted = now, completed
-	changed, _ := b.changeLibrary(func(data *library) bool {
-		if p.historySuppressed[key] || !b.canRecordHistory() {
+	canRecord := func() bool { return !p.historySuppressed[key] && b.canRecordHistory() }
+	if b.librarySaves != nil {
+		path := b.historySettingsPath
+		canRecord = func() bool { return canRecordAt(path) }
+	}
+	accepted := b.mutateLibrary(func(data *library) bool {
+		at := visit
+		if queuedVisit != nil {
+			at = *queuedVisit
+		}
+		if at.IsZero() || !canRecord() {
 			return false
 		}
-		i := slices.IndexFunc(data.History, func(e entry) bool { return e.URL == key && e.LastViewedAt.Equal(visit) })
+		i := slices.IndexFunc(data.History, func(e entry) bool { return e.URL == key && e.LastViewedAt.Equal(at) })
 		if i < 0 {
 			return false
 		}
@@ -94,16 +103,21 @@ func (b *browser) recordPlaybackProgress(p *playerWindow, now time.Time, force b
 		}
 		e.PositionKnown, e.PositionSeconds, e.DurationSeconds, e.Completed = true, seconds, duration, completed
 		return true
+	}, func(changed, _ bool) {
+		if changed && b.win != nil {
+			b.win.Invalidate()
+		}
 	})
-	if changed && b.win != nil {
-		b.win.Invalidate()
+	if accepted {
+		p.lastHistoryWrite, p.lastHistoryCompleted = now, completed
 	}
+	return accepted
 }
-func (b *browser) flushPlayerProgress(p *playerWindow) {
+func (b *browser) flushPlayerProgress(p *playerWindow) bool {
 	if p.native == nil && p.view != nil {
 		p.captureWebPosition(p.view.Page())
 	}
-	b.recordPlaybackProgress(p, time.Now(), true)
+	return b.recordPlaybackProgress(p, time.Now(), true)
 }
 func (b *browser) drawHistoryResume(c *ui.Context, e entry) {
 	if e.Kind != "動画" {

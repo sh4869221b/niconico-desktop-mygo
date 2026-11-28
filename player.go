@@ -29,7 +29,8 @@ type playerWindow struct {
 	saveHistory            func(bool)
 	historyVisitURL        string
 	historyVisitAt         time.Time
-	historyTarget          string // saved watch URL before applying a generated resume position
+	queuedHistoryVisit     *time.Time // Once submitted, the storage worker owns the time.
+	historyTarget          string     // saved watch URL before applying a generated resume position
 	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
@@ -45,6 +46,7 @@ func (p *playerWindow) resumeHistory(video string) {
 	delete(p.historySuppressed, video)
 	p.historyVisitURL = ""
 	p.historyVisitAt, p.lastHistoryWrite = time.Time{}, time.Time{}
+	p.queuedHistoryVisit = nil
 }
 
 func (p *playerWindow) visitWebVideo(video string) {
@@ -249,7 +251,11 @@ func (b *browser) openPlayerWithHistoryTarget(raw string, mode playbackMode, his
 		_ = p.win.SetIcon(appIconPNG)
 		b.player = p
 		p.saveHistory = func(force bool) { b.recordPlaybackProgress(p, time.Now(), force) }
-		p.win.OnClose(func(*mygo.CloseEvent) { b.flushPlayerProgress(p) })
+		p.win.OnClose(func(event *mygo.CloseEvent) {
+			if !b.closed && !b.libraryCloseReady && !b.librarySessionEnding && !b.flushPlayerProgress(p) {
+				event.PreventDefault()
+			}
+		})
 		p.win.OnClosed(func() {
 			// MyGo destroys WebViews owned by a closed window.
 			if b.player == p {

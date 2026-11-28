@@ -169,7 +169,7 @@ func TestMeasurement60ShowsAnErrorAndAllowsRetry(t *testing.T) {
 }
 
 func TestMeasurement60AcceptsInputWhileAQueuedWriteIsBusy(t *testing.T) {
-	q := newLibrarySaveQueue(filepath.Join(t.TempDir(), "library.json"))
+	q := newLibrarySaveQueue(filepath.Join(t.TempDir(), "library.json"), nil)
 	defer close(q.stop)
 	s := &librarySaveSession{queue: q}
 	started, release := make(chan struct{}), make(chan struct{})
@@ -289,7 +289,7 @@ func TestMeasure60(t *testing.T) {
 	event60("fixture-end", map[string]any{"pins": len(fixture)})
 	var async *librarySaveSession
 	if mode == "async" {
-		async = &librarySaveSession{queue: newLibrarySaveQueue(b.libraryPath)}
+		async = &librarySaveSession{queue: newLibrarySaveQueue(b.libraryPath, nil)}
 		defer close(async.queue.stop)
 	}
 	save := func(operation string, edit func(*library) bool) {
