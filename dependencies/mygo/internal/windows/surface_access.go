@@ -439,6 +439,9 @@ func (s *surface) getObject(wp, lp uintptr) (uintptr, bool) {
 // tells its clients what changed.
 func (s *surface) UpdateAccessibility(tree *platform.AccessTree) {
 	if t := s.access; t != nil && tree != nil {
+		if tree.Focus != t.focus {
+			s.traceFocus("tree_received", 0, tree.Focus, t.nodes[t.focus], t.quiet)
+		}
 		t.update(tree)
 	}
 }
@@ -502,6 +505,10 @@ func clearSlice[T any](s []T) []T {
 var listening = func() bool {
 	r, _, _ := procUiaClientsAreListening.Call()
 	return r != 0
+}
+
+var notifyWindowFocus = func(hwnd uintptr) {
+	procNotifyWinEvent.Call(eventObjectFocus, hwnd, uintptr(objidClient&0xffffffff), 0)
 }
 
 func (t *uiaTree) update(tree *platform.AccessTree) {
@@ -621,11 +628,15 @@ func (t *uiaTree) update(tree *platform.AccessTree) {
 	t.spareNodes = old
 	if tree.Focus != t.focus {
 		t.focus = tree.Focus
-		if e := t.nodes[t.focus]; e != nil && notify {
-			procUiaRaiseAutomationEvent.Call(e.ptr(ifaceSimple), uiaFocusChangedEvent)
-			// Clients that follow the focus through WinEvents, as those of
-			// System.Windows.Automation, then ask the window for it.
-			procNotifyWinEvent.Call(eventObjectFocus, t.s.hwnd, uintptr(objidClient&0xffffffff), 0)
+		t.s.traceFocus("focus_committed", 0, t.focus, t.nodes[t.focus], notify)
+		if e := t.nodes[t.focus]; e != nil && !t.quiet {
+			if notify {
+				procUiaRaiseAutomationEvent.Call(e.ptr(ifaceSimple), uiaFocusChangedEvent)
+			}
+			// Native controls share an HWND. A client that queries focus
+			// without subscribing to UIA events still needs the WinEvent
+			// when keyboard focus moves between its virtual children.
+			notifyWindowFocus(t.s.hwnd)
 		}
 	}
 	if e := t.nodes[announcerID]; e != nil && notify && len(tree.Announcements) > 0 {
@@ -1007,7 +1018,9 @@ func initUIA() {
 			if e == nil {
 				return hr
 			}
-			return out(p, e.tree.nodes[e.tree.focus], ifaceFragment)
+			focus := e.tree.nodes[e.tree.focus]
+			e.tree.s.traceFocus("provider_get_focus", 0, e.tree.focus, focus, focus != nil)
+			return out(p, focus, ifaceFragment)
 		}),
 	)
 
@@ -1231,7 +1244,9 @@ func (e *uiaElement) property(id int, v *variant) {
 	case uiaNameProperty:
 		str(n.Label)
 	case uiaHasKeyboardFocusProperty:
-		*v = boolVariant(n.ID == e.tree.focus)
+		focused := n.ID == e.tree.focus
+		e.tree.s.traceFocus("provider_has_keyboard_focus", 0, e.tree.focus, e, focused)
+		*v = boolVariant(focused)
 	case uiaIsFocusableProperty:
 		*v = boolVariant(n.States&platform.AccessFocusable != 0)
 	case uiaIsEnabledProperty:
