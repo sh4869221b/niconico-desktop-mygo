@@ -17,7 +17,7 @@ func TestCatalogRefreshRetainsAnAnchorByVideoID(t *testing.T) {
 	b.presentNativeResult(p, nil)
 	view := ui.NewTester(b.draw, 1000, 600)
 	for range 11 {
-		view.Scroll(700, 350, 0, 480)
+		view.Scroll(700, 500, 0, 480)
 	}
 	first, last := b.nativeVisit().list.Visible()
 	if first < 2 || last+1 >= len(p.items) {

@@ -64,8 +64,8 @@ func TestBrowseLongListNavigation(t *testing.T) {
 	click("進む")
 	checkRoute(p.items[99].link)
 	click("戻る")
-	for range 22 {
-		view.Scroll(700, 350, 0, -480)
+	for range 40 {
+		view.Scroll(700, 500, 0, -480)
 	}
 	click("投稿者")
 	checkRoute(p.items[0].owner)
