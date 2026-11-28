@@ -177,11 +177,11 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 	if !n.showOverview || !view.HasText("コメント欄の内容") || !view.HasText("概要のマイリスト") || !view.HasText("概要の動画") {
 		t.Fatal("overview links and comments should be visible together")
 	}
-	click("mylist/456")
+	click("概要のマイリスト")
 	if r := b.navigation[b.index]; r.kind != screenList || r.key != "456" || b.player != p || !stream.Playing() {
 		t.Fatalf("overview link did not open in the main window: %+v", r)
 	}
-	click("sm8")
+	click("概要の動画")
 	if b.playbackRequest != 1 {
 		t.Fatal("overview video link did not use the player entry point")
 	}
