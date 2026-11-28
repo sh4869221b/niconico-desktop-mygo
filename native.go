@@ -279,7 +279,13 @@ func (b *browser) drawNative(c *ui.Context) {
 		if r.kind == screenVideo {
 			ui.Text(scope, videoDetailText(r, p)).Wrap().TextColor(t.TextMuted)
 		}
-		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
+		actions := ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center)
+		notice := listSearchNotice(r.kind)
+		var filter *collectionFilterControls
+		if notice != "" {
+			filter = ui.Local(actions, "collection filter", func() collectionFilterControls { return collectionFilterControls{} })
+		}
+		actions.Children(func() {
 			switch r.kind {
 			case screenSearch:
 				b.drawSearchSort(scope, r)
@@ -321,11 +327,24 @@ func (b *browser) drawNative(c *ui.Context) {
 			if r.kind != screenVideo && ui.Button(scope, officialLabel).Clicked() {
 				b.openOfficial(r.target)
 			}
+			if filter != nil && r.collectionQuery == "" && !filter.open {
+				button := ui.Button(scope, "一覧全体を絞り込む")
+				if filter.focusButton {
+					filter.focusButton = false
+					button.Focus()
+				}
+				if button.Clicked() {
+					filter.open, filter.focusInput = true, true
+				}
+			}
 		})
-		if notice := listSearchNotice(r.kind); notice != "" {
+		if filter != nil {
 			ui.Text(scope, notice).TextColor(t.TextMuted).Wrap()
+			if filter.open || r.collectionQuery != "" {
+				b.drawCollectionFilter(scope, r, p, filter)
+			}
 		}
-		if r.page > 0 || p.more || r.kind == screenSearch {
+		if r.collectionQuery == "" && (r.page > 0 || p.more || r.kind == screenSearch) {
 			ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				if ui.Button(scope, "最初のページ").Disabled(r.page == 0).Clicked() {
 					b.openNative(r.withPage(0), true)
@@ -613,11 +632,11 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 func listSearchNotice(kind screenKind) string {
 	switch kind {
 	case screenUser:
-		return "投稿日時の新しい順で、一覧全体をページごとに取得しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+		return "投稿日時の新しい順で表示しています。別の並び順は公式ページで選べます。"
 	case screenList:
-		return "作成者が設定した既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+		return "作成者が設定した既定の順序で表示しています。別の並び順は公式ページで選べます。"
 	case screenOwnList:
-		return "一覧の既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+		return "一覧の既定の順序で表示しています。別の並び順は公式ページで選べます。"
 	}
 	return ""
 }

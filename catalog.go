@@ -45,12 +45,13 @@ const (
 )
 
 type screenRoute struct {
-	kind           screenKind
-	link           string // canonical link used for identity and API parameters
-	target         string // URL opened by the player or the official page button
-	key            string
-	page           int  // zero based
-	officialBrowse bool // recognized browse page whose conditions require the official UI
+	kind            screenKind
+	link            string // canonical link used for identity and API parameters
+	target          string // URL opened by the player or the official page button
+	key             string
+	collectionQuery string // local title filter, never part of the official target
+	page            int    // zero based
+	officialBrowse  bool   // recognized browse page whose conditions require the official UI
 }
 
 func routeFor(raw string) screenRoute {
@@ -237,17 +238,18 @@ type card struct {
 }
 
 type catalogPage struct {
-	title, summary, author string
-	searchMode             string
-	items, links           []card
-	description            []descriptionPart
-	tags                   []string
-	publisher              videoPublisher
-	details                videoDetails
-	emptyNotice            string
-	more                   bool
-	total                  *int
-	rawCount               int
+	title, summary, author    string
+	searchMode                string
+	items, links              []card
+	description               []descriptionPart
+	tags                      []string
+	publisher                 videoPublisher
+	details                   videoDetails
+	emptyNotice               string
+	more                      bool
+	total                     *int
+	rawCount                  int
+	collectionPaginationKnown bool
 }
 
 type catalog struct {
@@ -535,7 +537,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 	result, err := decodeJSON[struct {
 		Meta struct{ Status int }
 		Data struct {
-			TotalCount int
+			TotalCount *int
 			HasNext    *bool
 			Items      []row
 			Mylists    []struct {
@@ -547,7 +549,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 			}
 			Mylist *struct {
 				Name, Description string
-				TotalItemCount    int
+				TotalItemCount    *int
 				HasNext           *bool
 				Items             []row
 			}
@@ -568,7 +570,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		if result.Data.Mylists == nil {
 			return p, errors.New("マイリスト一覧の応答形式が変わっています")
 		}
-		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, limit)
+		p.more = hasMoreTotal(result.Data.HasNext, r.page, result.Data.TotalCount, limit)
 		for _, list := range result.Data.Mylists {
 			id := strconv.FormatInt(list.ID, 10)
 			if !numeric(id, 12) || !private && !list.IsPublic {
@@ -596,17 +598,21 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		return p, nil
 	}
 	rows := result.Data.Items
+	hasNext := result.Data.HasNext
 	if r.kind == screenUser {
-		p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, limit)
+		p.total = result.Data.TotalCount
 	} else if m := result.Data.Mylist; m != nil {
 		if m.Name != "" {
 			p.title = m.Name
 		}
 		p.summary, p.links, p.description = plainDescription(m.Description)
-		p.more, rows = hasMore(m.HasNext, r.page, m.TotalItemCount, limit), m.Items
+		p.total, hasNext, rows = m.TotalItemCount, m.HasNext, m.Items
 	} else {
 		return p, errors.New("マイリストの応答形式が変わっています")
 	}
+	p.collectionPaginationKnown = hasNext != nil || p.total != nil
+	p.more = hasMoreTotal(hasNext, r.page, p.total, limit)
+	p.rawCount = len(rows)
 	for _, item := range rows {
 		v := item.Video
 		if r.kind == screenUser {
@@ -626,6 +632,14 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		}
 	}
 	return p, nil
+}
+
+func hasMoreTotal(flag *bool, page int, total *int, pageSize int) bool {
+	count := 0
+	if total != nil {
+		count = *total
+	}
+	return hasMore(flag, page, count, pageSize)
 }
 
 func hasMore(flag *bool, page, total, pageSize int) bool {
@@ -695,7 +709,12 @@ func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {
 	switch r.kind {
 	case screenSearch:
 		return c.search(ctx, r)
-	case screenUser, screenUserLists, screenList, screenOwnLists, screenOwnList:
+	case screenUser, screenList, screenOwnList:
+		if r.collectionQuery != "" {
+			return c.filterCollection(ctx, r)
+		}
+		fallthrough
+	case screenUserLists, screenOwnLists:
 		return c.list(ctx, r)
 	case screenVideo:
 		return c.video(ctx, r)
