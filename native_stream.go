@@ -213,7 +213,7 @@ func nativeComments(ctx context.Context, w watchData) ([]timedComment, error) {
 			if c.VposMs < 0 || c.VposMs > 86_400_000 || strings.TrimSpace(c.Body) == "" || len(out) >= 15000 {
 				continue
 			}
-			c.Body = cleanDanmakuText(c.Body)
+			c.Body = cleanCommentListText(c.Body)
 			if c.Body == "" {
 				continue
 			}

@@ -1,14 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 )
 
 type profileFile struct{ kind, name, path, state string }
@@ -45,19 +47,23 @@ func validateProfileBytes(kind string, data []byte) error {
 	}
 	return nil
 }
-func readProfileBytes(path string) ([]byte, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	info, err := f.Stat()
+func openRegularProfileFile(path string) (*os.File, error) {
+	info, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("通常のファイルを選んでください")
 	}
+	return os.Open(path)
+}
+
+func readProfileBytes(path string) ([]byte, error) {
+	f, err := openRegularProfileFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxLibraryBytes+1))
 	if err != nil {
 		return nil, err
@@ -92,14 +98,23 @@ func inspectProfileFiles(root string) []profileFile {
 
 // Always creates a new copy. The source and all existing destinations survive failures.
 func saveProfileCopy(source, destination, kind string, validate bool) error {
-	data, err := readProfileBytes(source)
-	if err != nil {
-		return err
-	}
+	var contents io.Reader
 	if validate {
+		data, err := readProfileBytes(source)
+		if err != nil {
+			return err
+		}
 		if err := validateProfileBytes(kind, data); err != nil {
 			return err
 		}
+		contents = bytes.NewReader(data)
+	} else {
+		original, err := openRegularProfileFile(source)
+		if err != nil {
+			return err
+		}
+		defer original.Close()
+		contents = original
 	}
 	f, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -112,7 +127,7 @@ func saveProfileCopy(source, destination, kind string, validate bool) error {
 			os.Remove(destination)
 		}
 	}()
-	if _, err = f.Write(data); err != nil {
+	if _, err = io.Copy(f, contents); err != nil {
 		return err
 	}
 	if err = f.Sync(); err != nil {
@@ -129,44 +144,53 @@ func (b *browser) chooseProfileCopy(file profileFile, recovery bool) {
 		return
 	}
 	b.storageBusy = true
-	go mygo.RunOnMain(func() {
-		defer func() {
+	go func() {
+		source := file.path
+		var destination, notice string
+		mygo.RunOnMain(func() {
+			if b.closed {
+				return
+			}
+			suffix, title := ".backup.json", "元ファイルのバックアップを別名で保存"
+			if recovery {
+				paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: b.win, Title: "復元に使うJSONファイルを選択"})
+				if err != nil {
+					notice = "ファイルを選べませんでした。"
+					return
+				}
+				if len(paths) == 0 {
+					return
+				}
+				source = paths[0]
+				suffix, title = ".recovered.json", "検証済みの復元用コピーの保存先を選択"
+			}
+			path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: b.win, Title: title, DefaultPath: file.path + suffix})
+			if err != nil {
+				notice = "保存先を選べませんでした。"
+				return
+			}
+			destination = path
+		})
+		if destination != "" {
+			if err := saveProfileCopy(source, destination, file.kind, recovery); err != nil {
+				notice = "コピーを保存できませんでした。元ファイルは変更していません: " + err.Error()
+			} else {
+				notice = "コピーを保存しました: " + destination
+				if recovery {
+					notice += "。アプリを終了し、元ファイルのバックアップを確認してから、このコピーを " + file.path + " に配置して再起動してください。"
+				}
+			}
+		}
+		mygo.RunOnMain(func() {
 			b.storageBusy = false
-			if b.win != nil {
+			if notice != "" {
+				b.storageNotice = notice
+			}
+			if !b.closed && b.win != nil {
 				b.win.Invalidate()
 			}
-		}()
-		source := file.path
-		suffix, title := ".backup.json", "元ファイルのバックアップを別名で保存"
-		if recovery {
-			paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: b.win, Title: "復元に使うJSONファイルを選択"})
-			if err != nil {
-				b.storageNotice = "ファイルを選べませんでした。"
-				return
-			}
-			if len(paths) == 0 {
-				return
-			}
-			source = paths[0]
-			suffix, title = ".recovered.json", "検証済みの復元用コピーの保存先を選択"
-		}
-		destination, err := mygo.Dialog.Save(mygo.SaveDialogOptions{Parent: b.win, Title: title, DefaultPath: file.path + suffix})
-		if err != nil {
-			b.storageNotice = "保存先を選べませんでした。"
-			return
-		}
-		if destination == "" {
-			return
-		}
-		if err = saveProfileCopy(source, destination, file.kind, recovery); err != nil {
-			b.storageNotice = "コピーを保存できませんでした。元ファイルは変更していません: " + err.Error()
-			return
-		}
-		b.storageNotice = "コピーを保存しました: " + destination
-		if recovery {
-			b.storageNotice += "。アプリを終了し、元ファイルのバックアップを確認してから、このコピーを " + file.path + " に配置して再起動してください。"
-		}
-	})
+		})
+	}()
 }
 func (b *browser) drawStorageSettings(c *ui.Context) {
 	label := "保存先と復旧を表示"
@@ -175,8 +199,18 @@ func (b *browser) drawStorageSettings(c *ui.Context) {
 	}
 	if ui.Button(c, label).Clicked() {
 		b.storageOpen = !b.storageOpen
-		if b.storageOpen {
-			b.storageFiles = inspectProfileFiles(filepath.Dir(b.libraryPath))
+		if b.storageOpen && !b.storageBusy {
+			root := filepath.Dir(b.libraryPath)
+			b.storageBusy = true
+			go func() {
+				files := inspectProfileFiles(root)
+				mygo.RunOnMain(func() {
+					b.storageFiles, b.storageBusy = files, false
+					if !b.closed && b.win != nil {
+						b.win.Invalidate()
+					}
+				})
+			}()
 		}
 	}
 	if !b.storageOpen {
@@ -184,7 +218,9 @@ func (b *browser) drawStorageSettings(c *ui.Context) {
 	}
 	ui.Text(c, "保存先・読み込み状態").Bold()
 	ui.Text(c, "復旧手順: 元ファイルを別名でバックアップ → 手元の復元用JSONを検証して別名保存 → アプリ終了後にコピーを配置 → 再起動。既存ファイルは自動で上書きしません。").Wrap()
-	if len(b.storageFiles) == 0 {
+	if len(b.storageFiles) == 0 && b.storageBusy {
+		ui.Text(c, "保存ファイルを確認しています…").Role(ui.RoleStatus)
+	} else if len(b.storageFiles) == 0 {
 		ui.Text(c, "保存先を取得できません。")
 	}
 	for i, file := range b.storageFiles {

@@ -1,11 +1,13 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestSettingsOfferStorageRecovery(t *testing.T) {
@@ -13,6 +15,35 @@ func TestSettingsOfferStorageRecovery(t *testing.T) {
 	v := ui.NewTester(b.draw, 1000, 850)
 	if _, ok := v.Find("保存先と復旧を表示"); !ok {
 		t.Fatal("settings do not expose storage recovery")
+	}
+}
+
+func TestOversizedDamagedProfileCanBeBackedUpWithoutValidation(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "library.json")
+	backup := filepath.Join(dir, "backup.json")
+	recovery := filepath.Join(dir, "recover.json")
+	damaged := bytes.Repeat([]byte{0xa5}, maxLibraryBytes+64)
+	if err := os.WriteFile(source, damaged, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if files := inspectProfileFiles(dir); len(files) == 0 || !strings.Contains(files[0].state, "読み込み失敗") {
+		t.Fatalf("oversized profile passed inspection: %+v", files)
+	}
+	if err := saveProfileCopy(source, backup, "library", false); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{source, backup} {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, damaged) {
+			t.Fatalf("damaged bytes were not preserved: %d bytes (%v)", len(got), err)
+		}
+	}
+	if err := saveProfileCopy(source, recovery, "library", true); err == nil {
+		t.Fatal("oversized profile passed recovery validation")
+	}
+	if _, err := os.Stat(recovery); !os.IsNotExist(err) {
+		t.Fatalf("validation created a destination: %v", err)
 	}
 }
 
@@ -80,10 +111,9 @@ func TestStorageStatesAndReadFailureAreVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.playbackPath = path
-	b.playbackBlocked = true
 	b.changePlayback(nativePlayback)
 	got, _ := os.ReadFile(path)
-	if string(got) != string(original) {
+	if !b.playbackBlocked || string(got) != string(original) {
 		t.Fatal("unreadable playback preference overwritten")
 	}
 }
