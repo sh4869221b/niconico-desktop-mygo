@@ -162,7 +162,7 @@ func (p *playerWindow) canFocusPlayback(route screenRoute, mode playbackMode, pa
 	if mode == nativePlayback {
 		return p.native != nil && (p.native.loadingStream || p.native.stream != nil) && routeFor(p.target).link == route.link
 	}
-	return page != nil && !p.replaceFailedWebView && p.document.loaded && !p.document.loading &&
+	return page != nil && p.failedWebTarget == "" && !p.replaceFailedWebView && p.document.loaded && !p.document.loading &&
 		!page.IsLoading() && routeFor(page.URL()).link == route.link
 }
 

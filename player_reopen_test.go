@@ -55,3 +55,17 @@ func TestReopenUsesLiveWatchPageBeforePolling(t *testing.T) {
 		t.Fatal("skipped navigation while the live page was loading")
 	}
 }
+
+func TestReopenRetriesFailedWebViewLoadWithRetainedDocument(t *testing.T) {
+	watch := routeFor(home + "watch/sm9")
+	p := &playerWindow{mode: webPlayback, target: watch.target, document: playerDocument{loaded: true}}
+	p.document.begin()
+	p.document.stopLoad()
+	p.failedWebTarget = watch.target
+	if !p.document.loaded {
+		t.Fatal("fixture did not retain the previously loaded document")
+	}
+	if p.canFocusPlayback(watch, webPlayback, reopenPage{url: watch.target}) {
+		t.Fatal("focus-only path hid a failed navigation")
+	}
+}
