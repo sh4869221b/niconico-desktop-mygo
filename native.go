@@ -207,9 +207,9 @@ func (b *browser) drawNative(c *ui.Context) {
 	epoch := b.epoch
 	// Keep the controls in the same focus scope while changing sort or page.
 	scope := c.Key(r.kind).Key(r.key)
-	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
+	ui.Column(scope).Bind(&b.contentRegion).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
 		if r.kind == screenHome {
-			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
+			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold().Focusable().Bind(&b.contentFocus)
 			ui.Text(scope, "ログインせずに動画を検索できます。上の入力欄にキーワードやタグを入力してください。").Wrap()
 			if ui.PrimaryButton(scope, "例：初音ミクを検索欄に入れる").Clicked() {
 				b.searchInput.field, b.focusSearch = "初音ミク", true
@@ -236,7 +236,7 @@ func (b *browser) drawNative(c *ui.Context) {
 			_, label := canonical(r.link)
 			ui.Text(scope, label).TextColor(t.TextMuted)
 		}
-		ui.Text(scope, title).FontSize(24).Bold().Wrap()
+		ui.Text(scope, title).FontSize(24).Bold().Wrap().Focusable().Bind(&b.contentFocus)
 		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			switch r.kind {
 			case screenSearch:
