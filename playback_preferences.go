@@ -127,6 +127,7 @@ func (b *browser) drawPlaybackSettings(c *ui.Context) {
 		ui.Text(c, "独自：日本語弾幕と端末内のローカルNGを利用できます。コメント投稿や一部の配信には対応していません。").Wrap()
 		ui.Text(c, "どちらも別ウィンドウで開きます。ここで選ぶ既定は次に開く動画から適用します。再生中の「公式 WebView で開く」はその動画だけの切替で、既定は変わりません。").Wrap()
 		b.drawNativeDisplaySettings(c)
+		b.drawHistorySettings(c)
 		b.drawStorageSettings(c)
 	})
 }

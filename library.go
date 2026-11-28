@@ -17,10 +17,11 @@ import (
 const maxLibraryBytes = 2_000_000
 
 type entry struct {
-	URL    string
-	Title  string
-	Kind   string
-	Target string `json:",omitempty"`
+	URL          string
+	Title        string
+	Kind         string
+	Target       string    `json:",omitempty"`
+	LastViewedAt time.Time `json:",omitzero"`
 }
 type library struct {
 	Pins    []entry
@@ -78,7 +79,11 @@ func normalize(xs []entry, limit int, videosOnly bool) []entry {
 	seen := make(map[string]bool)
 	out := make([]entry, 0, min(len(xs), limit))
 	for _, e := range xs {
+		viewed := e.LastViewedAt
 		e, ok := makeEntry(e.openURL(), e.Title)
+		if videosOnly {
+			e.LastViewedAt = viewed.UTC()
+		}
 		if !ok || seen[e.URL] || videosOnly && e.Kind != "動画" {
 			continue
 		}
