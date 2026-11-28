@@ -423,6 +423,8 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 				v.owner = (publisherMetadata{ID: item.UserID}).publisher("user").videos
 			}
 			p.items = append(p.items, v)
+		} else {
+			p.items = append(p.items, unavailableVideo())
 		}
 	}
 	return p, nil
@@ -619,6 +621,8 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 				p.publisher = v.Owner.publisher("user")
 			}
 			p.items = append(p.items, x)
+		} else {
+			p.items = append(p.items, unavailableVideo())
 		}
 	}
 	return p, nil
@@ -700,6 +704,10 @@ func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {
 	default:
 		return catalogPage{}, nil
 	}
+}
+
+func unavailableVideo() card {
+	return card{title: "現在表示できない動画", summary: "動画を特定できないため開けません。"}
 }
 
 func makeOptionalVideo(id, title string, duration, views, comments *int) (card, bool) {
