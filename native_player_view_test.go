@@ -177,11 +177,11 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 	if !n.showOverview || !view.HasText("コメント欄の内容") || !view.HasText("概要のマイリスト") || !view.HasText("概要の動画") {
 		t.Fatal("overview links and comments should be visible together")
 	}
-	click("mylist/456")
+	click("概要のマイリスト")
 	if r := b.navigation[b.index]; r.kind != screenList || r.key != "456" || b.player != p || !stream.Playing() {
 		t.Fatalf("overview link did not open in the main window: %+v", r)
 	}
-	click("sm8")
+	click("概要の動画")
 	if b.playbackRequest != 1 {
 		t.Fatal("overview video link did not use the player entry point")
 	}
@@ -207,14 +207,28 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 	checkPicture := func(scale string) {
 		t.Helper()
 		img := view.Image()
+		longest, consecutive := 0, 0
 		for y := 0; y < img.Bounds().Dy(); y++ {
+			painted := false
 			for x := 0; x < img.Bounds().Dx(); x++ {
 				if img.RGBAAt(x, y) == green {
-					return
+					painted = true
+					break
 				}
 			}
+			if painted {
+				consecutive++
+				longest = max(longest, consecutive)
+			} else {
+				consecutive = 0
+			}
 		}
-		t.Fatalf("video disappeared with expanded overview, tags and comments at %s", scale)
+		// A few painted pixels can pass even when the video is clipped to
+		// a sliver. Require a visible band above the original 49.6 DIP case.
+		const minimum = 80
+		if longest < minimum {
+			t.Fatalf("video painted %d pixels vertically at %s, want at least %d", longest, scale, minimum)
+		}
 	}
 	focus := func(label string) {
 		t.Helper()
@@ -232,6 +246,8 @@ func TestPlayerOverviewAndPublisherLeaveVideoPlaying(t *testing.T) {
 		checkPicture(fmt.Sprintf("%.1f text scale", scale))
 	}
 	view.SetPreferences(ui.Preferences{})
+	view.SetZoom(1.5)
+	checkPicture("1.5× UI zoom")
 	view.SetZoom(2)
 	checkPicture("2× UI zoom")
 	view.SetZoom(1)
@@ -402,11 +418,11 @@ func TestPlayerDanmakuControls(t *testing.T) {
 	if stream.Playing() || !hasRed() {
 		t.Fatal("expected the paused video with a red overlay")
 	}
-	click("コメント表示切替")
+	click("弾幕を表示")
 	if n.showComments || hasRed() {
 		t.Fatal("hidden overlay still painted")
 	}
-	click("コメント表示切替")
+	click("弾幕を表示")
 	if !n.showComments || !hasRed() {
 		t.Fatal("overlay did not return")
 	}
