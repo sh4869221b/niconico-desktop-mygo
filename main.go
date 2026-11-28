@@ -45,6 +45,7 @@ type browser struct {
 	official, openingOfficial    bool
 	loginHelp                    bool
 	officialTarget               string
+	officialTitleSource          string
 	catalog                      catalog
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
@@ -243,9 +244,9 @@ func (b *browser) attachOfficial() {
 		if !active() {
 			return
 		}
-		b.title = e.Title
-		if b.loaded && !p.IsLoading() && p.URL() == b.source {
-			b.updatePinTitle(b.source, e.Title)
+		b.title, b.officialTitleSource = e.Title, p.URL()
+		if !p.IsLoading() {
+			b.updateOfficialPinTitle()
 		}
 		b.win.Invalidate()
 	})
@@ -257,7 +258,7 @@ func (b *browser) attachOfficial() {
 		if b.playOfficialLink(view, raw, true) {
 			return
 		}
-		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.finishOfficialPage(raw)
 		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
 		b.status = "ニコニコ公式ページ"
@@ -297,7 +298,7 @@ func (b *browser) attachOfficial() {
 func (b *browser) loading() {
 	b.loaded = false
 	b.status = "読み込み中…"
-	b.title = ""
+	b.title, b.officialTitleSource = "", ""
 }
 
 func (b *browser) loadOfficial(target string) {
@@ -410,6 +411,17 @@ func (b *browser) updatePinTitle(raw, title string) {
 	if e, ok := makeEntry(raw, title); ok && b.storeWarning == "" && b.data.pinTitleUpdate(e) >= 0 {
 		b.changeLibrary(func(data *library) bool { return data.fillPinTitle(e) })
 	}
+}
+
+func (b *browser) updateOfficialPinTitle() {
+	if b.loaded && b.officialTitleSource == b.source {
+		b.updatePinTitle(b.source, b.title)
+	}
+}
+
+func (b *browser) finishOfficialPage(raw string) {
+	b.source, b.loaded = raw, allowedURL(raw) != nil
+	b.updateOfficialPinTitle()
 }
 
 func (b *browser) pinCurrent() {

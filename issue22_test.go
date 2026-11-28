@@ -80,6 +80,48 @@ func TestPlayerRepairsPinTitleWithUnchangedOrSuppressedHistory(t *testing.T) {
 	}
 }
 
+func TestOfficialPinTitleCanBeRepairedAfterThePageFinishes(t *testing.T) {
+	const raw = home + "tag/test?l_range=1"
+	pin, _ := makeEntry(raw, "")
+	b := &browser{libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{Pins: []entry{pin}}}
+	if err := saveLibrary(b.libraryPath, b.data); err != nil {
+		t.Fatal(err)
+	}
+	b.loading()
+	b.title, b.officialTitleSource = "読み込んだ公式ページ", raw
+	b.updateOfficialPinTitle()
+	if !b.data.Pins[0].hasPlaceholderTitle() {
+		t.Fatal("title was saved before the page finished")
+	}
+	b.finishOfficialPage(home + "tag/other")
+	if !b.data.Pins[0].hasPlaceholderTitle() {
+		t.Fatal("title was saved for a different loaded page")
+	}
+	b.finishOfficialPage(raw)
+	if b.data.Pins[0].Title != b.title {
+		t.Fatal("the pre-finish title did not name the saved official page")
+	}
+}
+
+func TestPinTitleRepairKeepsTheSavedSearchPage(t *testing.T) {
+	first := routeFor(searchURL("tag", "作品"))
+	second := first.withPage(1)
+	pin, _ := makeEntry(second.target, "")
+	b := &browser{libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{Pins: []entry{pin}}}
+	if err := saveLibrary(b.libraryPath, b.data); err != nil {
+		t.Fatal(err)
+	}
+	b.updatePinTitle(first.target, "作品（1ページ）")
+	if !b.data.Pins[0].hasPlaceholderTitle() {
+		t.Fatal("another page replaced the placeholder")
+	}
+	b.updatePinTitle(second.target, "作品（2ページ）")
+	got, err := loadLibrary(b.libraryPath)
+	if err != nil || len(got.Pins) != 1 || got.Pins[0].Title != "作品（2ページ）" || routeFor(got.Pins[0].openURL()).page != 1 {
+		t.Fatalf("saved title and page diverged: %+v (%v)", got.Pins, err)
+	}
+}
+
 func TestPinBeforeAndAfterMetadata(t *testing.T) {
 	r := routeFor(home + "watch/sm9")
 	b := browser{navigation: []screenRoute{r}, libraryPath: filepath.Join(t.TempDir(), "library.json")}

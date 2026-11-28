@@ -183,7 +183,15 @@ func (l library) pinTitleUpdate(e entry) int {
 		return -1
 	}
 	return slices.IndexFunc(l.Pins, func(pin entry) bool {
-		return pin.URL == e.URL && pin.Title != e.Title && pin.hasPlaceholderTitle()
+		if pin.URL != e.URL || pin.Title == e.Title || !pin.hasPlaceholderTitle() {
+			return false
+		}
+		switch e.Kind {
+		case "キーワード検索", "タグ検索":
+			return routeFor(pin.openURL()).page == routeFor(e.openURL()).page
+		default:
+			return true
+		}
 	})
 }
 
