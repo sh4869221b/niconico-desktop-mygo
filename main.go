@@ -38,6 +38,7 @@ type browser struct {
 	historySettingsPath, historyPeriod, historyNotice string
 	historySettingsErr                                error
 	historyDisabled                                   bool
+	historySettingsChecked                            time.Time
 	historyErasePending                               []entry
 
 	storageOpen, storageBusy, playbackBlocked bool
@@ -524,6 +525,8 @@ func (b *browser) draw(c *ui.Context) {
 		if b.showPlaybackSettings {
 			_, height := c.Size()
 			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
+		} else {
+			b.historySettingsChecked = time.Time{}
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {

@@ -108,3 +108,32 @@ func TestHistoryStopAlsoProtectsAgainstAnotherOpenInstance(t *testing.T) {
 		t.Fatalf("another instance kept recording after the preference changed: %+v (%v)", got.History, err)
 	}
 }
+
+func TestHistorySettingReflectsAnotherInstance(t *testing.T) {
+	dir := t.TempDir()
+	p := &playerWindow{}
+	first := &browser{index: -1, closed: true, closeHelpAcknowledged: true, showPlaybackSettings: true, player: p, libraryPath: filepath.Join(dir, "library.json"), historySettingsPath: filepath.Join(dir, "history.json")}
+	second := &browser{libraryPath: first.libraryPath, historySettingsPath: first.historySettingsPath}
+	const label = "今後の履歴を記録"
+	v := ui.NewTester(first.draw, 1000, 850)
+	assertChecked := func(want bool) {
+		t.Helper()
+		box, found := v.Access(label)
+		if !found || box.Checked != want {
+			t.Fatalf("history setting checked=%v, found=%v, want %v", box.Checked, found, want)
+		}
+	}
+	assertChecked(true)
+	second.setHistoryRecording(false)
+	v.Advance(time.Second)
+	assertChecked(false)
+	first.recordVideo(p, home+"watch/sm9", "記録しない")
+	second.setHistoryRecording(true)
+	v.Advance(time.Second)
+	assertChecked(true)
+	first.recordVideo(p, home+"watch/sm10", "履歴に記録")
+	got, err := loadLibrary(first.libraryPath)
+	if err != nil || len(got.History) != 1 || got.History[0].URL != home+"watch/sm10" {
+		t.Fatalf("stored history did not follow the shared setting: %+v (%v)", got.History, err)
+	}
+}

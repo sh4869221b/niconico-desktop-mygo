@@ -33,23 +33,20 @@ func loadHistoryRecording(path string) (bool, error) {
 	}
 	return !*value.RecordHistory, nil
 }
+func (b *browser) refreshHistoryRecording() {
+	if b.historySettingsPath != "" {
+		b.historyDisabled, b.historySettingsErr = loadHistoryRecording(b.historySettingsPath)
+	}
+}
+
 func (b *browser) canRecordHistory() bool {
-	// Called under the library transaction lock when writing history.
-	if b.historySettingsErr != nil {
-		return false
-	}
-	if b.historySettingsPath == "" {
-		return !b.historyDisabled
-	}
-	disabled, err := loadHistoryRecording(b.historySettingsPath)
-	return err == nil && !disabled
+	// Use the same shared value for the setting and for the write decision.
+	// The library transaction holds the lock used to change the preference.
+	b.refreshHistoryRecording()
+	return b.historySettingsErr == nil && !b.historyDisabled
 }
 
 func (b *browser) setHistoryRecording(record bool) {
-	if b.historySettingsErr != nil {
-		b.historyNotice = "履歴設定を読み込めないため上書きしません。元ファイルを確認してください。"
-		return
-	}
 	data, _ := json.Marshal(struct {
 		RecordHistory bool `json:"recordHistory"`
 	}{record})
@@ -59,6 +56,7 @@ func (b *browser) setHistoryRecording(record bool) {
 		}
 		return writeSettings(b.historySettingsPath, data)
 	}); err != nil {
+		b.refreshHistoryRecording()
 		b.historyNotice = "履歴設定を保存できませんでした。"
 		return
 	}
@@ -119,9 +117,19 @@ func (b *browser) eraseSelectedHistory() {
 	}
 }
 func (b *browser) drawHistorySettings(c *ui.Context) {
+	if b.historySettingsPath != "" {
+		now := c.Now()
+		next := b.historySettingsChecked.Add(time.Second)
+		if !now.Before(next) {
+			b.refreshHistoryRecording()
+			b.historySettingsChecked = now
+			next = now.Add(time.Second)
+		}
+		c.After(next.Sub(now))
+	}
 	ui.Text(c, "視聴履歴").Bold()
 	record := !b.historyDisabled
-	if ui.Checkbox(c, &record, "今後の履歴を記録").Changed() {
+	if ui.Checkbox(c, &record, "今後の履歴を記録").Disabled(b.historySettingsErr != nil).Changed() {
 		b.setHistoryRecording(record)
 	}
 	if b.historySettingsErr != nil {
