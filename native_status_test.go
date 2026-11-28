@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 
@@ -43,6 +45,45 @@ func TestResultStatusAnnouncesEachTransitionOnce(t *testing.T) {
 	if a, ok := v.Access("結果領域"); !ok || a.Busy {
 		t.Fatal("result region remained busy")
 	}
-	b.status = "保存しました。"
+	b.reportStatus("保存しました。")
 	check("保存しました。")
+}
+
+func TestRepeatedLibraryOperationsAnnounceEveryResult(t *testing.T) {
+	for _, broken := range []bool{false, true} {
+		name := "saved"
+		if broken {
+			name = "failed"
+		}
+		t.Run(name, func(t *testing.T) {
+			first, _ := makeEntry(home+"watch/sm1", "同名の動画")
+			second, _ := makeEntry(home+"watch/sm2", first.Title)
+			b := &browser{index: -1, closed: true, closeHelpAcknowledged: true, showLibrary: true, libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{Pins: []entry{first, second}}}
+			if err := saveLibrary(b.libraryPath, b.data); err != nil {
+				t.Fatal(err)
+			}
+			label := libraryDeleteLabel(first, false)
+			want := label + "しました。"
+			if broken {
+				if err := os.WriteFile(b.libraryPath, []byte("{"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				want = "保存に失敗しました。次に登録や履歴を操作したときに再試行します。"
+			}
+			v := ui.NewTester(b.draw, 1260, 850)
+			v.UseScreenReader()
+			for range 2 {
+				if err := v.Click(label); err != nil {
+					t.Fatal(err)
+				}
+				if got := v.Announcements(); !slices.Equal(got, []string{want}) {
+					t.Fatalf("operation announced %v, want %q once", got, want)
+				}
+				v.Frame()
+				if got := v.Announcements(); len(got) != 0 {
+					t.Fatalf("idle redraw announced %v", got)
+				}
+			}
+		})
+	}
 }
