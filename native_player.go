@@ -43,6 +43,13 @@ type nativePlayer struct {
 	tags                  []string
 	tagNotice             string
 	displayPending        bool
+
+	metadataCtx                      context.Context
+	metadataRoute                    screenRoute
+	metadataWatch                    watchData
+	tagLoading, tagFailed            bool
+	commentsLoading, commentsFailed  bool
+	tagGeneration, commentGeneration uint64
 }
 
 const defaultNativeVolume = 80
@@ -118,39 +125,14 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		if err != nil || ctx.Err() != nil {
 			return
 		}
-		go func() {
-			tags, publisher, err := playbackDetails(ctx, b.catalog, route, source.watch)
-			mygo.RunOnMain(func() {
-				if active() && ctx.Err() == nil {
-					n.tags, n.tagNotice = tags, "タグはありません。"
-					n.publisher = publisher
-					if err != nil {
-						n.tagNotice = "タグを取得できませんでした。"
-					}
-					p.win.Invalidate()
-				}
-			})
-		}()
 		_, _, description := plainDescription(source.watch.Video.Description)
 		mygo.RunOnMain(func() {
 			if active() && ctx.Err() == nil {
+				n.metadataCtx, n.metadataRoute, n.metadataWatch = ctx, route, source.watch
 				n.description = description
 				p.win.Invalidate()
-			}
-		})
-		comments, err := nativeComments(ctx, source.watch)
-		details := &nativeCommentData{rows: comments, cues: makeDanmakuCues(comments)}
-		if err != nil {
-			details.notice = "コメントを取得できませんでした。"
-		} else if len(comments) == 0 {
-			details.notice = "表示できる日本語コメントはありません。"
-		} else if len(comments) == 15000 {
-			details.notice = "取得したコメントのうち15,000件まで表示しています。"
-		}
-		mygo.RunOnMain(func() {
-			if active() && ctx.Err() == nil {
-				n.stagedComments = details
-				p.win.Invalidate()
+				b.fetchNativeTags(p, n)
+				b.fetchNativeComments(p, n)
 			}
 		})
 	}()
@@ -453,6 +435,9 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 			})
 			if n.tagNotice != "" {
 				b.drawVideoTags(c, n.tags, n.tagNotice)
+			}
+			if n.tagFailed && ui.Button(c, "タグを再取得").Disabled(n.tagLoading).Clicked() {
+				b.fetchNativeTags(b.player, n)
 			}
 		})
 	})
