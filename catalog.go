@@ -227,6 +227,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	masked                                            bool
 }
 
 type catalogPage struct {
@@ -445,6 +446,7 @@ func (v apiVideo) thumbnailURL() string {
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeOptionalVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
 	x.thumbnail = v.thumbnailURL()
+	x.masked = v.RequireSensitiveMasking
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
 	if len(x.tags) == 0 {
@@ -559,11 +561,14 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 				label = "非公開"
 			}
 			item := card{link: link, title: list.Name, summary: fmt.Sprintf("%s  ·  %d 件", label, list.ItemsCount)}
+			maskedSample := false
 			for _, sample := range list.SampleItems {
+				maskedSample = maskedSample || sample.Video.RequireSensitiveMasking
 				if item.thumbnail = sample.Video.thumbnailURL(); item.thumbnail != "" {
 					break
 				}
 			}
+			item.masked = item.thumbnail == "" && maskedSample
 			p.items = append(p.items, item)
 		}
 		return p, nil
