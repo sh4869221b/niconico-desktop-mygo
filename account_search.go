@@ -68,6 +68,8 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute, private bool)
 	for _, v := range result.Data.Items {
 		if item, ok := v.card(); ok {
 			p.items = append(p.items, item)
+		} else {
+			p.items = append(p.items, unavailableVideo())
 		}
 	}
 	return p, nil
