@@ -21,17 +21,22 @@ const appName = "Niconico Desktop MyGo"
 var version = "dev"
 
 type browser struct {
-	win                          *mygo.Window
-	web                          *mygo.WebView
-	source, title, status        string
-	searchInput                  searchInput
-	libraryPath, storeWarning    string
-	commentLanguageWarning       bool
-	data                         library
-	pendingLibraryEdits          []func(*library) bool
-	history, loaded, closed      bool
-	showLibrary                  bool
-	undoRemoval                  *libraryRemoval
+	win                       *mygo.Window
+	web                       *mygo.WebView
+	source, title, status     string
+	searchInput               searchInput
+	libraryPath, storeWarning string
+	commentLanguageWarning    bool
+	data                      library
+	pendingLibraryEdits       []func(*library) bool
+	history, loaded, closed   bool
+	showLibrary               bool
+	undoRemoval               *libraryRemoval
+
+	storageOpen, storageBusy, playbackBlocked bool
+	storageFiles                              []profileFile
+	storageNotice, ngReadWarning              string
+
 	layoutPath                   string
 	layoutLoadErr                error
 	focusSearch                  bool
@@ -116,12 +121,17 @@ func (b *browser) start(initial string) {
 			b.playMode = mode
 		} else {
 			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
+			b.playbackBlocked = true
 		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
-		b.commentNG, _ = loadCommentNG(filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json"))
+		ngPath := filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json")
+		b.commentNG, err = loadCommentNG(ngPath)
+		if err != nil {
+			b.ngReadWarning = "NG設定を読み込めません。元ファイルを保護しています: " + ngPath
+		}
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
-			b.storeWarning = "既存の保存ファイルを読み込めません。上書きは行いません。"
+			b.storeWarning = "保存ファイルを読み込めません。上書きは行いません: " + b.libraryPath
 		}
 	} else {
 		b.storeWarning = "保存先を取得できません。"
@@ -491,7 +501,8 @@ func (b *browser) draw(c *ui.Context) {
 			b.drawCloseHelp(c)
 		}
 		if b.showPlaybackSettings {
-			b.drawPlaybackSettings(c)
+			_, height := c.Size()
+			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
@@ -512,7 +523,7 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		if b.undoRemoval != nil || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+		if b.undoRemoval != nil || b.ngReadWarning != "" || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
 			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
 				if b.undoRemoval != nil && ui.Button(c, "元に戻す").Clicked() {
 					b.undoLibraryRemoval()
@@ -522,6 +533,9 @@ func (b *browser) draw(c *ui.Context) {
 				}
 				if b.official && b.commentLanguageWarning {
 					ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted).Wrap()
+				}
+				if b.ngReadWarning != "" {
+					ui.Text(c, b.ngReadWarning).TextColor(t.TextMuted).Wrap()
 				}
 				if b.storeWarning != "" {
 					ui.Text(c, b.storeWarning).TextColor(t.TextMuted).Wrap()
