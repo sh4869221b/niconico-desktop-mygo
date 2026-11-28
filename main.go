@@ -346,21 +346,23 @@ func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) 
 		return edit(&b.data), false
 	}
 	var latest library
-	err := withSettingsLock(b.libraryPath, func() error {
-		var err error
-		latest, err = loadLibrary(b.libraryPath)
-		if err != nil {
-			return err
-		}
-		dirty := false
-		for _, pending := range b.pendingLibraryEdits {
-			dirty = pending(&latest) || dirty
-		}
-		changed = edit(&latest)
-		if dirty || changed {
-			return saveLibrary(b.libraryPath, latest)
-		}
-		return nil
+	err := observeLibrary60("transaction", func() error {
+		return withSettingsLock(b.libraryPath, func() error {
+			var err error
+			latest, err = loadLibrary(b.libraryPath)
+			if err != nil {
+				return err
+			}
+			dirty := false
+			for _, pending := range b.pendingLibraryEdits {
+				dirty = pending(&latest) || dirty
+			}
+			changed = edit(&latest)
+			if dirty || changed {
+				return saveLibrary(b.libraryPath, latest)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		changed = edit(&b.data)

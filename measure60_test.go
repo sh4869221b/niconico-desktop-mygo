@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -101,16 +102,24 @@ func TestMeasure60(t *testing.T) {
 		}
 	}()
 	event60("config", map[string]any{"directory": dir, "synthetic_delay_ms": ms, "go": runtime.Version(), "os": runtime.GOOS})
-	b := &browser{libraryPath: filepath.Join(dir, "library.json"), showLibrary: true}
-	seed := func() {
-		b.data = library{}
-		for i := 0; i < 500; i++ {
-			b.data.Pins = append(b.data.Pins, entry{URL: fmt.Sprintf("https://www.nicovideo.jp/watch/sm%d", i+1), Title: fmt.Sprintf("測定動画 %03d", i+1), Kind: "動画"})
-		}
+	var fixture []entry
+	for i := 0; i < 500; i++ {
+		fixture = append(fixture, entry{URL: fmt.Sprintf("https://www.nicovideo.jp/watch/sm%d", i+1), Title: fmt.Sprintf("測定動画 %03d", i+1), Kind: "動画"})
 	}
-	seed()
+	b := &browser{index: -1, libraryPath: filepath.Join(dir, "library.json"), showLibrary: true, data: library{Pins: slices.Clone(fixture)}}
+	event60("fixture-start", map[string]any{"pins": len(fixture)})
 	if err := saveLibrary(b.libraryPath, b.data); err != nil {
 		t.Fatal(err)
+	}
+	event60("fixture-end", map[string]any{"pins": len(fixture)})
+	save := func(operation string, edit func(*library) bool) {
+		start := time.Now()
+		event60("save-start", map[string]any{"operation": operation, "pins": len(b.data.Pins)})
+		changed, saved := b.changeLibrary(edit)
+		event60("save-end", map[string]any{"operation": operation, "pins": len(b.data.Pins), "elapsed_ns": time.Since(start).Nanoseconds(), "changed": changed, "saved": saved})
+		if !saved {
+			t.Error("the measured transaction did not persist the fixture")
+		}
 	}
 	// UI probes start after the seed has been durably written.
 	probe := ""
@@ -121,19 +130,28 @@ func TestMeasure60(t *testing.T) {
 			now := time.Now()
 			if !previous.IsZero() {
 				event60("frame", map[string]any{"gap_ns": now.Sub(previous).Nanoseconds()})
+			} else {
+				event60("ui-ready", map[string]any{})
 			}
 			previous = now
-			ui.Column(c).Fill().Padding(8).Gap(8).Children(func() {
+			ui.Column(c).Fill().Padding(8).Gap(8).ObserveInput(func(ev ui.InputEvent) {
+				switch {
+				case ev.Kind == ui.InputKeyDown && ev.Key == ui.KeyTab:
+					event60("tab-delivered", map[string]any{"repeat": ev.Repeat})
+				case ev.Kind == ui.InputScroll:
+					event60("scroll-delivered", map[string]any{"dx": ev.DX, "dy": ev.DY})
+				}
+			}).Children(func() {
 				ui.Text(c, fmt.Sprintf("専用プロファイル: %s / synthetic Sync delay: %d ms", dir, ms)).Wrap()
 				ui.Row(c).Gap(8).Children(func() {
 					if ui.Button(c, "500件を再保存").Clicked() {
-						event60("save-start", map[string]any{"operation": "persist", "pins": len(b.data.Pins)})
-						b.persist()
-						event60("save-end", map[string]any{"operation": "persist", "pins": len(b.data.Pins)})
+						save("resave", func(*library) bool { return true })
 					}
 					if ui.Button(c, "500件に戻して保存").Clicked() {
-						seed()
-						b.persist()
+						save("reset", func(data *library) bool {
+							data.Pins = slices.Clone(fixture)
+							return true
+						})
 					}
 					ui.TextInput(c, &probe).Label("入力応答プローブ")
 				})
@@ -158,8 +176,19 @@ func TestMeasure60(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Pins) != len(b.data.Pins) {
-		t.Fatalf("persisted %d pins, memory has %d", len(got.Pins), len(b.data.Pins))
+	if !slices.Equal(got.Pins, b.data.Pins) || !slices.Equal(got.History, b.data.History) {
+		t.Fatalf("persisted library differs from the measurement UI (%d versus %d pins)", len(got.Pins), len(b.data.Pins))
 	}
-	event60("final", map[string]any{"pins": len(got.Pins), "path": b.libraryPath})
+	counts := map[string]int{"saved": 0, "probe-handled": 0, "tab-delivered": 0, "scroll-delivered": 0}
+	storage60.Lock()
+	for _, row := range storage60.rows {
+		name, _ := row["event"].(string)
+		if name == "save-end" && row["saved"] == true {
+			counts["saved"]++
+		} else if _, tracked := counts[name]; tracked {
+			counts[name]++
+		}
+	}
+	storage60.Unlock()
+	event60("final", map[string]any{"pins": len(got.Pins), "events": counts})
 }
