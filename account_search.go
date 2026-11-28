@@ -47,7 +47,10 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute, private bool)
 	if err != nil {
 		return p, err
 	}
-	if private && (result.Meta.Status == 401 || result.Meta.Status == 403) {
+	if private && result.Meta.Status == 403 {
+		return p, errAccessDenied
+	}
+	if private && result.Meta.Status == 401 {
 		return p, errSignIn
 	}
 	if result.Meta.Status != 200 || result.Data.Items == nil {
