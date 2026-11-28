@@ -306,12 +306,16 @@ func (b *browser) drawNative(c *ui.Context) {
 		}
 		if r.kind == screenSearch && !b.busy && b.resultErr == nil {
 			ui.Text(scope, p.searchRange(r)).TextColor(t.TextMuted).Wrap()
+			ui.Text(scope, searchSourceNotice(p.searchMode)).TextColor(t.TextMuted).Wrap()
 		}
 		if b.busy {
 			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
 			return
 		}
 		if b.resultErr != nil {
+			if r.kind == screenSearch {
+				ui.Text(scope, "同じ条件で「再試行」するか、「公式ページ」を開いてください。並べ替えを変更する場合は上の選択欄から選べます。").Wrap()
+			}
 			if (r.kind == screenOwnLists || r.kind == screenOwnList) && !errors.Is(b.resultErr, errSignIn) {
 				if ui.Button(scope, "ログイン状態を再確認して再取得").Disabled(b.loginBusy).Clicked() {
 					b.checkLogin()
@@ -519,6 +523,13 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 			b.navigate(item.link)
 		}
 	}
+}
+
+func searchSourceNotice(mode string) string {
+	if mode == "スナップショット検索" {
+		return "スナップショット検索に切り替えました。選択した並び順を保持しています。検索インデックスの更新には時差があり、最新の結果と異なる場合があります。更新時刻は取得できません。"
+	}
+	return mode + "の結果です。結果の更新時刻は取得できません。最新の状況は公式ページでも確認できます。"
 }
 
 // Keep the known author when moving between their collections.

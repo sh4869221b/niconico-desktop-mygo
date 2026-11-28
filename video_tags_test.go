@@ -112,7 +112,9 @@ func TestSearchResultMetadataUsesTheSearchResponse(t *testing.T) {
 		t.Fatalf("keyboard activation did not open exact tag search: %+v", target)
 	}
 	b.moveNative(-1)
-	view.Frame()
+	// Keep the narrow-width checks above. Give the list room for its second
+	// row after the search range and source explanation wrap.
+	view.SetSize(640, 850)
 	if err := view.Click("投稿動画"); err != nil {
 		t.Fatal(err)
 	}
