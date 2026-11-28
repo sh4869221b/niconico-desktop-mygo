@@ -43,8 +43,8 @@ func TestBrowseLongListNavigation(t *testing.T) {
 	}
 	// Reach an item that was outside the initial viewport, after resizing.
 	view.SetSize(1000, 600)
-	for i := 0; i < 22; i++ {
-		view.Scroll(700, 350, 0, 480)
+	for i := 0; i < 40; i++ {
+		view.Scroll(700, 500, 0, 480)
 	}
 	click(p.items[99].title)
 	checkRoute(p.items[99].link)
@@ -99,8 +99,8 @@ func TestCatalogThumbnailOpensCorrectVirtualRow(t *testing.T) {
 	if app.playbackRequest != 0 {
 		t.Fatal("right-click opened a video")
 	}
-	for range 26 {
-		view.Scroll(550, 340, 0, 460)
+	for range 40 {
+		view.Scroll(550, 500, 0, 460)
 	}
 	if err := view.Click(p.items[99].title + " を再生"); err != nil {
 		t.Fatal(err)

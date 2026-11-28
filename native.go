@@ -272,10 +272,17 @@ func (b *browser) drawNative(c *ui.Context) {
 					b.navigate(mylists)
 				}
 			}
-			if r.kind != screenVideo && ui.Button(scope, "公式ページ").Clicked() {
+			officialLabel := "公式ページ"
+			if r.kind == screenUser || r.kind == screenList || r.kind == screenOwnList {
+				officialLabel = "公式ページで絞り込み・並べ替え"
+			}
+			if r.kind != screenVideo && ui.Button(scope, officialLabel).Clicked() {
 				b.openOfficial(r.target)
 			}
 		})
+		if notice := listSearchNotice(r.kind); notice != "" {
+			ui.Text(scope, notice).TextColor(t.TextMuted).Wrap()
+		}
 		if r.page > 0 || p.more || r.kind == screenSearch {
 			ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				if ui.Button(scope, "最初のページ").Disabled(r.page == 0).Clicked() {
@@ -533,6 +540,18 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 			b.navigate(item.link)
 		}
 	}
+}
+
+func listSearchNotice(kind screenKind) string {
+	switch kind {
+	case screenUser:
+		return "投稿日時の新しい順で、一覧全体をページごとに取得しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	case screenList:
+		return "作成者が設定した既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	case screenOwnList:
+		return "一覧の既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	}
+	return ""
 }
 
 func searchSourceNotice(mode string) string {
