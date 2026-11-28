@@ -50,6 +50,7 @@ type browser struct {
 	official, openingOfficial    bool
 	loginHelp                    bool
 	officialTarget               string
+	officialTitleSource          string
 	catalog                      catalog
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
@@ -253,7 +254,10 @@ func (b *browser) attachOfficial() {
 		if !active() {
 			return
 		}
-		b.title = e.Title
+		b.title, b.officialTitleSource = e.Title, p.URL()
+		if !p.IsLoading() {
+			b.updateOfficialPinTitle()
+		}
 		b.win.Invalidate()
 	})
 	p.OnDidFinishLoad(func() {
@@ -264,7 +268,7 @@ func (b *browser) attachOfficial() {
 		if b.playOfficialLink(view, raw, true) {
 			return
 		}
-		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.finishOfficialPage(raw)
 		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
 		b.status = "ニコニコ公式ページ"
@@ -304,7 +308,7 @@ func (b *browser) attachOfficial() {
 func (b *browser) loading() {
 	b.loaded = false
 	b.status = "読み込み中…"
-	b.title = ""
+	b.title, b.officialTitleSource = "", ""
 }
 
 func (b *browser) loadOfficial(target string) {
@@ -387,10 +391,15 @@ func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) 
 
 func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	e, ok := makeEntry(raw, title)
-	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
+	if p == nil || b.player != p || !ok || e.Kind != "動画" {
 		return
 	}
+	suppressHistory := p.historySuppressed[e.URL]
 	b.changeLibrary(func(data *library) bool {
+		pinUpdated := data.fillPinTitle(e)
+		if suppressHistory {
+			return pinUpdated
+		}
 		next := e
 		if next.Title == next.URL {
 			if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
@@ -398,7 +407,7 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 			}
 		}
 		if len(data.History) > 0 && data.History[0] == next {
-			return false
+			return pinUpdated
 		}
 		data.History = putFirst(data.History, next, 100)
 		return true
@@ -406,6 +415,23 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if b.win != nil {
 		b.win.Invalidate()
 	}
+}
+
+func (b *browser) updatePinTitle(raw, title string) {
+	if e, ok := makeEntry(raw, title); ok && b.storeWarning == "" && b.data.pinTitleUpdate(e) >= 0 {
+		b.changeLibrary(func(data *library) bool { return data.fillPinTitle(e) })
+	}
+}
+
+func (b *browser) updateOfficialPinTitle() {
+	if b.loaded && b.officialTitleSource == b.source {
+		b.updatePinTitle(b.source, b.title)
+	}
+}
+
+func (b *browser) finishOfficialPage(raw string) {
+	b.source, b.loaded = raw, allowedURL(raw) != nil
+	b.updateOfficialPinTitle()
 }
 
 func (b *browser) pinCurrent() {
@@ -417,23 +443,31 @@ func (b *browser) pinCurrent() {
 		b.status = b.storeWarning
 		return
 	}
-	var duplicate bool
-	changed, saved := b.changeLibrary(func(data *library) bool {
+	var added, renamed, duplicate bool
+	_, saved := b.changeLibrary(func(data *library) bool {
+		added, renamed = false, false
 		duplicate = slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL })
-		if duplicate || len(data.Pins) >= 500 {
+		if duplicate {
+			renamed = data.fillPinTitle(e)
+			return renamed
+		}
+		if len(data.Pins) >= 500 {
 			return false
 		}
 		data.Pins = putFirst(data.Pins, e, 500)
+		added = true
 		return true
 	})
-	if changed {
+	if added {
 		b.showLibrary = true
 	}
 	if saved {
 		switch {
+		case renamed:
+			b.status = "登録済みの仮の名前を更新しました。"
 		case duplicate:
 			b.status = "登録済みです。"
-		case changed:
+		case added:
 			b.status = e.Kind + "を登録しました。"
 		default:
 			b.status = "登録は500件までです。登録済みタブから不要な項目を削除してください。"
@@ -652,7 +686,11 @@ func (b *browser) sidebar(c *ui.Context) {
 				for _, item := range items {
 					row := c.Key(item.URL)
 					ui.Row(row).Gap(4).AlignItems(ui.Center).Children(func() {
-						if ui.Button(row, "["+item.Kind+"] "+item.Title).Tooltip(item.Title).Grow(1).MinWidth(0).Clicked() {
+						name := item.Title
+						if !b.history && item.hasPlaceholderTitle() {
+							name = "仮の名前: " + name
+						}
+						if ui.Button(row, "["+item.Kind+"] "+name).Tooltip(name).Grow(1).MinWidth(0).Clicked() {
 							b.navigate(item.openURL())
 						}
 						if ui.Button(row, "×").Label(libraryDeleteLabel(item, b.history)).Clicked() {
