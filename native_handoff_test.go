@@ -99,10 +99,10 @@ func TestNativeHandoffAfterAnEngineStopsDoesNotInventAPause(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := &nativePlayer{stream: s, videoID: "sm9", handoffKnown: true, handoffTime: 25 * time.Second, cancel: func() {}}
+	n := &nativePlayer{stream: s, videoID: "sm9", handoffKnown: true, retryAt: 25 * time.Second, cancel: func() {}}
 	v := ui.NewTester(func(c *ui.Context) { ui.Video(c, s).Fill() }, 640, 480)
-	n.togglePlayback()
-	n.togglePlayback() // Resume input before the decoder fails.
+	toggleNativePlayback(s)
+	toggleNativePlayback(s) // Resume input before the decoder fails.
 	v.Advance(time.Second)
 	if s.Err() == nil || s.Playing() {
 		t.Fatal("fixture did not fail during playback")
