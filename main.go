@@ -21,56 +21,58 @@ const appName = "Niconico Desktop MyGo"
 var version = "dev"
 
 type browser struct {
-	win                                       *mygo.Window
-	web                                       *mygo.WebView
-	source, title, status                     string
-	searchInput                               searchInput
-	libraryPath, storeWarning                 string
-	commentLanguageWarning                    bool
-	data                                      library
-	pendingLibraryEdits                       []func(*library) bool
-	history, loaded, closed                   bool
-	showLibrary                               bool
-	undoRemoval                               *libraryRemoval
+	win                       *mygo.Window
+	web                       *mygo.WebView
+	source, title, status     string
+	searchInput               searchInput
+	libraryPath, storeWarning string
+	commentLanguageWarning    bool
+	data                      library
+	pendingLibraryEdits       []func(*library) bool
+	history, loaded, closed   bool
+	showLibrary               bool
+	undoRemoval               *libraryRemoval
+
 	storageOpen, storageBusy, playbackBlocked bool
 	storageFiles                              []profileFile
 	storageNotice, ngReadWarning              string
-	layoutPath                                string
-	layoutLoadErr                             error
-	focusSearch                               bool
-	closeHelpPath                             string
-	closeHelpAcknowledged                     bool
-	session                                   *mygo.Session
-	loginState                                loginState
-	loginBusy                                 bool
-	loginCheck                                uint64
-	loginCancel, stopLoginWatch               context.CancelFunc
-	official, openingOfficial                 bool
-	loginHelp                                 bool
-	officialTarget                            string
-	catalog                                   catalog
-	thumbnails                                *thumbnails
-	navigation                                []screenRoute
-	nativeVisits                              []*catalogVisit
-	index                                     int
-	userNames                                 map[string]string
-	result                                    catalogPage
-	knownVideoDetails                         map[string]videoDetails
-	resultErr                                 error
-	busy                                      bool
-	cancel                                    context.CancelFunc
-	epoch                                     uint64
-	player                                    *playerWindow
-	playbackRequest                           uint64
-	playMode                                  playbackMode
-	showPlaybackSettings                      bool
-	playbackPath, playbackNotice              string
-	commentNG                                 commentNG
-	nativeVolume                              float64
-	nativeDisplay                             nativeDisplayPreferences
-	nativeDisplayNotice                       string
-	nativeMuted                               bool
-	nativeAudioNotice                         string
+
+	layoutPath                   string
+	layoutLoadErr                error
+	focusSearch                  bool
+	closeHelpPath                string
+	closeHelpAcknowledged        bool
+	session                      *mygo.Session
+	loginState                   loginState
+	loginBusy                    bool
+	loginCheck                   uint64
+	loginCancel, stopLoginWatch  context.CancelFunc
+	official, openingOfficial    bool
+	loginHelp                    bool
+	officialTarget               string
+	catalog                      catalog
+	thumbnails                   *thumbnails
+	navigation                   []screenRoute
+	nativeVisits                 []*catalogVisit
+	index                        int
+	userNames                    map[string]string
+	result                       catalogPage
+	knownVideoDetails            map[string]videoDetails
+	resultErr                    error
+	busy                         bool
+	cancel                       context.CancelFunc
+	epoch                        uint64
+	player                       *playerWindow
+	playbackRequest              uint64
+	playMode                     playbackMode
+	showPlaybackSettings         bool
+	playbackPath, playbackNotice string
+	commentNG                    commentNG
+	nativeVolume                 float64
+	nativeDisplay                nativeDisplayPreferences
+	nativeDisplayNotice          string
+	nativeMuted                  bool
+	nativeAudioNotice            string
 
 	searchFocus, libraryFocus, contentFocus ui.Handle
 	libraryRegion, contentRegion            ui.Handle
