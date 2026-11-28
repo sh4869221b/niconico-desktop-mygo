@@ -21,17 +21,19 @@ const appName = "Niconico Desktop MyGo"
 var version = "dev"
 
 type browser struct {
-	win                       *mygo.Window
-	web                       *mygo.WebView
-	source, title, status     string
-	searchInput               searchInput
-	libraryPath, storeWarning string
-	commentLanguageWarning    bool
-	data                      library
-	pendingLibraryEdits       []func(*library) bool
-	history, loaded, closed   bool
-	showLibrary               bool
-	undoRemoval               *libraryRemoval
+	win                           *mygo.Window
+	web                           *mygo.WebView
+	source, title, status         string
+	searchInput                   searchInput
+	libraryPath, storeWarning     string
+	commentLanguageWarning        bool
+	data                          library
+	pendingLibraryEdits           []func(*library) bool
+	history, loaded, closed       bool
+	showLibrary                   bool
+	libraryQuery, libraryKind     string
+	libraryExpanded, focusContent bool
+	undoRemoval                   *libraryRemoval
 
 	storageOpen, storageBusy, playbackBlocked bool
 	storageFiles                              []profileFile
@@ -509,11 +511,18 @@ func (b *browser) draw(c *ui.Context) {
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
 				b.sidebar(c)
+				if b.libraryExpanded {
+					return
+				}
 			}
 			if b.loginHelp {
 				b.drawLoginHelp(c, b.official && b.officialTarget == login)
 			} else if !b.official {
 				b.drawNative(c)
+				if b.focusContent {
+					b.focusContent = false
+					b.contentFocus.Focus(c)
+				}
 			} else if b.web != nil {
 				ui.WebView(c, b.web).Grow(1).MinWidth(0)
 			} else {
@@ -558,6 +567,7 @@ func (b *browser) toolbar(c *ui.Context) {
 			back := b.loginHelp || b.official || b.index > 0
 			forward := p != nil && p.CanGoForward() || !b.official && b.index+1 < len(b.navigation)
 			if ui.Button(c, "‹").Label("戻る").Disabled(!back).Clicked() || back && c.Shortcut(ui.Alt, ui.KeyLeft) {
+				b.libraryExpanded = false
 				b.loginHelp = false
 				if p != nil && p.CanGoBack() {
 					p.GoBack()
@@ -568,6 +578,7 @@ func (b *browser) toolbar(c *ui.Context) {
 				}
 			}
 			if ui.Button(c, "›").Label("進む").Disabled(!forward).Clicked() || forward && c.Shortcut(ui.Alt, ui.KeyRight) {
+				b.libraryExpanded = false
 				b.loginHelp = false
 				if p != nil {
 					p.GoForward()
@@ -610,9 +621,12 @@ func (b *browser) toolbar(c *ui.Context) {
 			}
 			if ui.Button(c, "登録・履歴").Checked(b.showLibrary).Clicked() {
 				b.toggleLibrary()
+				if !b.showLibrary {
+					b.libraryExpanded = false
+				}
 			}
 			if ui.Button(c, "結果へ移動").Disabled(b.official).Tooltip("本文へ移動（F6 で領域間を移動、Shift+F6 で逆順）").Clicked() {
-				b.contentFocus.Focus(c)
+				b.focusResults(c)
 			}
 			if ui.Button(c, "マイリスト").Clicked() {
 				b.navigate(mylists)
@@ -661,7 +675,13 @@ func (b *browser) sidebar(c *ui.Context) {
 	if width < 900 {
 		sidebarWidth = 174
 	}
-	ui.Column(c).Bind(&b.libraryRegion).Width(sidebarWidth).Background(c.Theme().Surface).Padding(10).Gap(8).Children(func() {
+	pane := ui.Column(c).Bind(&b.libraryRegion).Background(c.Theme().Surface).Padding(10).Gap(8)
+	if b.libraryExpanded {
+		pane.Grow(1).MinWidth(0)
+	} else {
+		pane.Width(sidebarWidth)
+	}
+	pane.Children(func() {
 		ui.Text(c, "登録・履歴").Bold().Focusable().Label("登録・履歴領域").Bind(&b.libraryFocus)
 		ui.Row(c).Gap(5).Children(func() {
 			if ui.Button(c, "登録済み").Disabled(!b.history).Clicked() {
@@ -671,28 +691,52 @@ func (b *browser) sidebar(c *ui.Context) {
 				b.history = true
 			}
 		})
+		label := "ライブラリを広く表示"
+		if b.libraryExpanded {
+			label = "通常表示に戻る"
+		}
+		if ui.Button(c, label).Clicked() {
+			b.libraryExpanded = !b.libraryExpanded
+		}
+		ui.TextInput(c, &b.libraryQuery).Label("ライブラリ内を検索").Placeholder("タイトル・URLを検索").FillWidth().MinWidth(0)
+		kind := b.libraryKind
+		if kind == "" {
+			kind = "すべての種類"
+		}
+		if ui.Select(c, &kind, libraryKinds).Label("保存した項目の種類").FillWidth().Changed() {
+			b.libraryKind = kind
+		}
 		items := b.data.Pins
 		if b.history {
 			items = b.data.History
 		}
-		if len(items) == 0 {
-			notice := "視聴履歴はありません。"
-			if !b.history {
-				notice = "動画や検索結果を開き、上の「☆ 登録」でここに保存できます。"
+		visible := filterLibrary(items, b.libraryQuery, kind)
+		ui.Text(c, fmt.Sprintf("%d / %d 件", len(visible), len(items))).TextColor(c.Theme().TextMuted)
+		if len(visible) == 0 {
+			notice := "条件に一致する項目はありません。"
+			if len(items) == 0 {
+				notice = "視聴履歴はありません。"
+				if !b.history {
+					notice = "動画や検索結果を開き、上の「☆ 登録」でここに保存できます。"
+				}
 			}
 			ui.Text(c, notice).TextColor(c.Theme().TextMuted).Wrap()
 			return
 		}
-		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
+
+		ui.Scroll(c.Key(libraryResultKey{b.history, normalizeLibraryQuery(b.libraryQuery), kind})).Grow(1).MinHeight(0).Children(func() {
 			ui.Column(c).FillWidth().Gap(4).Children(func() {
-				for _, item := range items {
+				for _, item := range visible {
 					row := c.Key(item.URL)
 					ui.Row(row).Gap(4).AlignItems(ui.Center).Children(func() {
-						name := item.Title
-						if !b.history && item.hasPlaceholderTitle() {
-							name = "仮の名前: " + name
-						}
-						if ui.Button(row, "["+item.Kind+"] "+name).Tooltip(name).Grow(1).MinWidth(0).Clicked() {
+						label := libraryEntryLabel(item, b.history)
+						button := ui.Button(row, "").Label(label).Tooltip(item.Title).Grow(1).MinWidth(0).Justify(ui.Start).Children(func() {
+							line := ui.Text(row, label).Wrap()
+							if !b.libraryExpanded {
+								line.MaxLines(2)
+							}
+						})
+						if button.Clicked() {
 							b.navigate(item.openURL())
 						}
 						if ui.Button(row, "×").Label(libraryDeleteLabel(item, b.history)).Clicked() {
@@ -700,6 +744,9 @@ func (b *browser) sidebar(c *ui.Context) {
 							return
 						}
 					})
+					if b.libraryExpanded {
+						ui.Text(row, item.openURL()).TextColor(c.Theme().TextMuted).Wrap()
+					}
 				}
 			})
 		})
