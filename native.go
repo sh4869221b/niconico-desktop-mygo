@@ -207,9 +207,14 @@ func (b *browser) drawNative(c *ui.Context) {
 	epoch := b.epoch
 	// Keep the controls in the same focus scope while changing sort or page.
 	scope := c.Key(r.kind).Key(r.key)
-	ui.Column(scope).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
+	ui.Column(scope).Bind(&b.contentRegion).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
 		if r.kind == screenHome {
-			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold()
+			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold().Focusable().Bind(&b.contentFocus)
+			ui.Text(scope, "ログインせずに動画を検索できます。上の入力欄にキーワードやタグを入力してください。").Wrap()
+			if ui.PrimaryButton(scope, "例：初音ミクを検索欄に入れる").Clicked() {
+				b.searchInput.field, b.focusSearch = "初音ミク", true
+			}
+			ui.Text(scope, "結果の画像は再生、タイトルは詳細を開きます。気に入ったページは「☆ 登録」で保存できます。").Wrap()
 			ui.Row(scope).Gap(8).Wrap().Children(func() {
 				if ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
@@ -231,7 +236,7 @@ func (b *browser) drawNative(c *ui.Context) {
 			_, label := canonical(r.link)
 			ui.Text(scope, label).TextColor(t.TextMuted)
 		}
-		ui.Text(scope, title).FontSize(24).Bold().Wrap()
+		ui.Text(scope, title).FontSize(24).Bold().Wrap().Focusable().Bind(&b.contentFocus)
 		ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 			switch r.kind {
 			case screenSearch:
@@ -267,10 +272,17 @@ func (b *browser) drawNative(c *ui.Context) {
 					b.navigate(mylists)
 				}
 			}
-			if r.kind != screenVideo && ui.Button(scope, "公式ページ").Clicked() {
+			officialLabel := "公式ページ"
+			if r.kind == screenUser || r.kind == screenList || r.kind == screenOwnList {
+				officialLabel = "公式ページで絞り込み・並べ替え"
+			}
+			if r.kind != screenVideo && ui.Button(scope, officialLabel).Clicked() {
 				b.openOfficial(r.target)
 			}
 		})
+		if notice := listSearchNotice(r.kind); notice != "" {
+			ui.Text(scope, notice).TextColor(t.TextMuted).Wrap()
+		}
 		if r.page > 0 || p.more || r.kind == screenSearch {
 			ui.Row(scope).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				if ui.Button(scope, "最初のページ").Disabled(r.page == 0).Clicked() {
@@ -301,12 +313,21 @@ func (b *browser) drawNative(c *ui.Context) {
 		}
 		if r.kind == screenSearch && !b.busy && b.resultErr == nil {
 			ui.Text(scope, p.searchRange(r)).TextColor(t.TextMuted).Wrap()
+			ui.Text(scope, searchSourceNotice(p.searchMode)).TextColor(t.TextMuted).Wrap()
 		}
 		if b.busy {
 			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
 			return
 		}
 		if b.resultErr != nil {
+			if r.kind == screenSearch {
+				ui.Text(scope, "同じ条件で「再試行」するか、「公式ページ」を開いてください。並べ替えを変更する場合は上の選択欄から選べます。").Wrap()
+			}
+			if (r.kind == screenOwnLists || r.kind == screenOwnList) && !errors.Is(b.resultErr, errSignIn) {
+				if ui.Button(scope, "ログイン状態を再確認して再取得").Disabled(b.loginBusy).Clicked() {
+					b.checkLogin()
+				}
+			}
 			ui.Text(scope, b.resultErr.Error()).Wrap()
 			if !errors.Is(b.resultErr, errSignIn) && ui.Button(scope, "再試行").Clicked() {
 				b.refreshNative()
@@ -378,6 +399,13 @@ func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
 			}
 		}
 	}
+	if current.urlKey == "f" || current.urlKey == "n" {
+		direction := "新しい順"
+		if ascending {
+			direction = "古い順"
+		}
+		ui.Text(scope, direction).TextColor(scope.Theme().TextMuted)
+	}
 	if b.searchSortNotice != "" {
 		ui.Text(scope, b.searchSortNotice).Wrap()
 	}
@@ -438,6 +466,9 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 					}
 				} else if p.name != "" {
 					ui.Text(scope, p.name).SingleLine().Ellipsis("…").MaxWidth(240).MinWidth(0).Focusable().Tooltip(p.name)
+				}
+				if metric := item.searchMetric(b.navigation[b.index]); metric != "" {
+					ui.Text(scope, metric).TextColor(t.TextMuted).FontSize(12).Wrap()
 				}
 				b.drawVideoTags(scope, item.tags, "タグ情報なし")
 			}
@@ -509,6 +540,25 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 			b.navigate(item.link)
 		}
 	}
+}
+
+func listSearchNotice(kind screenKind) string {
+	switch kind {
+	case screenUser:
+		return "投稿日時の新しい順で、一覧全体をページごとに取得しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	case screenList:
+		return "作成者が設定した既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	case screenOwnList:
+		return "一覧の既定の順序で表示しています。名前の絞り込みや別の並び順は「公式ページで絞り込み・並べ替え」から選んでください。"
+	}
+	return ""
+}
+
+func searchSourceNotice(mode string) string {
+	if mode == "スナップショット検索" {
+		return "スナップショット検索に切り替えました。選択した並び順を保持しています。検索インデックスの更新には時差があり、最新の結果と異なる場合があります。更新時刻は取得できません。"
+	}
+	return mode + "の結果です。結果の更新時刻は取得できません。最新の状況は公式ページでも確認できます。"
 }
 
 // Keep the known author when moving between their collections.
