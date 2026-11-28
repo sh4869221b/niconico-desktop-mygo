@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestSidebarVisibilityRemembersUserChoice(t *testing.T) {
@@ -15,12 +16,20 @@ func TestSidebarVisibilityRemembersUserChoice(t *testing.T) {
 	}
 	b := &browser{index: -1, closed: true, showLibrary: shown, layoutPath: path}
 	v := ui.NewTester(b.draw, 1000, 700)
+	if _, visible := v.Find("登録・履歴領域"); !visible {
+		t.Fatal("new profiles should show the sidebar")
+	}
 	if err := v.Click("登録・履歴"); err != nil {
 		t.Fatal(err)
 	}
 	shown, err = loadSidebarVisibility(path)
 	if err != nil || shown {
 		t.Fatal("hidden sidebar choice not saved")
+	}
+	b = &browser{index: -1, closed: true, showLibrary: shown, layoutPath: path}
+	v = ui.NewTester(b.draw, 1000, 700)
+	if _, visible := v.Find("登録・履歴領域"); visible {
+		t.Fatal("a new window should keep the sidebar hidden")
 	}
 	if err := v.Click("登録・履歴"); err != nil {
 		t.Fatal(err)
@@ -29,7 +38,13 @@ func TestSidebarVisibilityRemembersUserChoice(t *testing.T) {
 	if err != nil || !shown {
 		t.Fatal("visible sidebar choice not saved")
 	}
+	b = &browser{index: -1, closed: true, showLibrary: shown, layoutPath: path}
+	v = ui.NewTester(b.draw, 1000, 700)
+	if _, visible := v.Find("登録・履歴領域"); !visible {
+		t.Fatal("a new window should show the restored sidebar")
+	}
 }
+
 func TestDamagedLayoutSettingsAreProtected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "layout.json")
 	original := []byte("broken json")
