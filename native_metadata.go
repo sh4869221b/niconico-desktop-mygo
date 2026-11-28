@@ -60,6 +60,8 @@ func (b *browser) fetchNativeComments(p *playerWindow, n *nativePlayer) {
 			details.notice = "コメントを取得できませんでした。"
 		} else if len(rows) == 0 {
 			details.notice = "表示できる日本語コメントはありません。"
+		} else if len(rows) == 15000 {
+			details.notice = "取得したコメントのうち15,000件まで表示しています。"
 		}
 		mygo.RunOnMain(func() {
 			if !b.acceptsNativeMetadata(p, n, false, generation) {

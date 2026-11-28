@@ -13,34 +13,36 @@ import (
 )
 
 type nativePlayer struct {
-	cancel                           context.CancelFunc
-	stream                           *ui.VideoPlayer
-	relay                            *hlsRelay
-	startDeadline                    time.Duration
-	loadingStream                    bool
-	pauseRequested                   bool
-	stagedComments                   *nativeCommentData
-	comments                         []danmakuCue
-	danmaku                          danmakuOverlay
-	commentViewport                  ui.Rect
-	status, commentNotice            string
-	startAt                          time.Duration
-	showComments                     bool
-	recorded                         bool
-	hideCommentPanel                 bool
-	showOverview                     bool
-	description                      []descriptionPart
-	publisher                        videoPublisher
-	allComments                      []timedComment
-	allCues                          []danmakuCue
-	commentRows                      []int
-	commentList                      ui.ListState
-	manageNG                         bool
-	ngNotice                         string
-	pendingNG                        commentNGEdit
-	follow                           commentFollow
-	tags                             []string
-	tagNotice                        string
+	cancel                context.CancelFunc
+	stream                *ui.VideoPlayer
+	relay                 *hlsRelay
+	startDeadline         time.Duration
+	loadingStream         bool
+	pauseRequested        bool
+	stagedComments        *nativeCommentData
+	comments              []danmakuCue
+	danmaku               danmakuOverlay
+	commentViewport       ui.Rect
+	status, commentNotice string
+	startAt               time.Duration
+	showComments          bool
+	recorded              bool
+	hideCommentPanel      bool
+	showOverview          bool
+	description           []descriptionPart
+	descriptionSource     string
+	publisher             videoPublisher
+	allComments           []timedComment
+	allCues               []danmakuCue
+	commentRows           []int
+	commentList           ui.ListState
+	manageNG              bool
+	ngNotice              string
+	pendingNG             commentNGEdit
+	follow                commentFollow
+	tags                  []string
+	tagNotice             string
+
 	metadataCtx                      context.Context
 	metadataRoute                    screenRoute
 	metadataWatch                    watchData
@@ -73,7 +75,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &nativePlayer{
-		cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
+		descriptionSource: route.target, cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
 		showComments: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
 	}
 	p.native, p.target = n, route.target
@@ -122,10 +124,12 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		if err != nil || ctx.Err() != nil {
 			return
 		}
+		_, _, description := plainDescription(source.watch.Video.Description)
 		mygo.RunOnMain(func() {
 			if active() && ctx.Err() == nil {
 				n.metadataCtx, n.metadataRoute, n.metadataWatch = ctx, route, source.watch
-				_, _, n.description = plainDescription(source.watch.Video.Description)
+				n.description = description
+				p.win.Invalidate()
 				b.fetchNativeTags(p, n)
 				b.fetchNativeComments(p, n)
 			}
@@ -204,9 +208,10 @@ func readPlaybackCookie(list func(mygo.CookieFilter) ([]mygo.Cookie, error), now
 }
 
 func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
+	c.SetTheme(readableAppTheme(c.Theme()))
 	n := p.native
 	if n == nil {
-		p.draw(c)
+		p.draw(c, func(mode playbackMode) { b.recoverPlayer(p, mode) })
 		return
 	}
 	t := c.Theme()
@@ -291,7 +296,11 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 			panel := ui.Column(c).Padding(6, 8).Gap(5).Border(1, t.Border).Radius(6).Background(t.Background)
 			if compact {
-				panel.Height(min(144, h*0.21)).Shrink(0).FillWidth()
+				commentsHeight := h * 0.21
+				if h < 520 {
+					commentsHeight = h * 0.16
+				}
+				panel.Height(min(144, commentsHeight)).Shrink(0).FillWidth()
 			} else {
 				panel.Width(max(246, min(340, w*0.30))).FillHeight()
 			}
@@ -370,7 +379,13 @@ func drawNativeVideo(c *ui.Context, n *nativePlayer, current time.Duration) {
 func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height float32) {
 	// Cap each band against the window height even when controls wrap at large
 	// text sizes. The video gets the remaining space.
-	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, height*0.17)).Shrink(0).Children(func() {
+	infoHeight, overviewHeight := height*0.17, height*0.18
+	if height < 520 {
+		// At the smallest size the metadata and overview remain scrollable.
+		// Leave room for the video even when both are open and text wraps.
+		infoHeight, overviewHeight = height*0.13, height*0.13
+	}
+	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, infoHeight)).Shrink(0).Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Padding(3, 0).Children(func() {
 			ui.Row(c).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
 				label := "概要欄を表示"
@@ -404,12 +419,12 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 		})
 	})
 	if n.showOverview {
-		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, height*0.18)).Shrink(0).Focusable().Label("概要欄").Children(func() {
+		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, overviewHeight)).Shrink(0).Focusable().Label("概要欄").Children(func() {
 			ui.Column(c).FillWidth().Padding(6, 8).Background(c.Theme().Background).Children(func() {
 				if len(n.description) == 0 {
 					ui.Text(c, "概要はありません。").Wrap()
 				} else {
-					b.drawDescription(c, n.description)
+					b.drawDescription(c, n.description, n.descriptionSource)
 				}
 			})
 		})
