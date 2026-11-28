@@ -1,7 +1,6 @@
 package main
 
 import (
-	"golang.org/x/net/idna"
 	"net"
 	"net/url"
 	"regexp"
@@ -10,13 +9,15 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/net/html"
+	"golang.org/x/net/idna"
 )
 
 var descriptionReferences = regexp.MustCompile(`(?i)(?:[a-z][a-z0-9+.-]*://|//|(?:www\.|sp\.)?nicovideo\.jp/|nico\.ms/)[^\s\p{Z}<>“”"「」『』、。！？，；]+|(?:mylist/|(?:watch/)?(?:sm|nm|so))[0-9]+`)
 
 type descriptionPart struct {
-	text string
-	link card
+	text    string
+	link    card
+	omitted bool
 }
 
 func descriptionLink(raw string) (card, string) {
@@ -65,10 +66,17 @@ func plainDescription(value string) (string, []card, []descriptionPart) {
 	var links []card
 	var parts []descriptionPart
 	seen := make(map[string]bool)
-	add := func(raw string) card {
+	omitted := false
+	add := func(raw string, allowExternal bool) card {
 		link, key := descriptionLink(raw)
+		if key == "" && allowExternal {
+			if target := descriptionExternalURL(raw); target != "" {
+				return card{link: target, title: target, external: true}
+			}
+		}
 		if key != "" && !seen[key] {
 			if len(links) >= 24 {
+				omitted = true
 				return card{}
 			}
 			links = append(links, link)
@@ -79,6 +87,9 @@ func plainDescription(value string) (string, []card, []descriptionPart) {
 	interactive := 0
 	write := func(s string, link card) {
 		text.WriteString(s)
+		if link.link != "" && interactive >= 64 {
+			omitted = true
+		}
 		if link.link == "" || interactive >= 64 {
 			plain.WriteString(s)
 			return
@@ -87,19 +98,19 @@ func plainDescription(value string) (string, []card, []descriptionPart) {
 			parts = append(parts, descriptionPart{text: plain.String()})
 			plain.Reset()
 		}
-		parts = append(parts, descriptionPart{s, link})
+		parts = append(parts, descriptionPart{text: s, link: link})
 		interactive++
 	}
 	writeText := func(s string) {
 		start := 0
-		for _, match := range descriptionReferences.FindAllStringIndex(s, 64) {
+		for _, match := range descriptionReferences.FindAllStringIndex(s, -1) {
 			lo, hi := match[0], match[1]
 			if lo > 0 && (referenceNeighbor(s[lo-1]) || s[lo-1] == '.') ||
 				hi < len(s) && (referenceNeighbor(s[hi]) || s[hi] == '.' && hi+1 < len(s) && referenceNeighbor(s[hi+1])) {
 				continue
 			}
 			raw := strings.TrimRight(s[lo:hi], "。．、！？：；,.)]}!?;）】」")
-			if link := add(raw); link.link != "" {
+			if link := add(raw, false); link.link != "" {
 				write(s[start:lo], card{})
 				write(raw, link)
 				start = lo + len(raw)
@@ -121,6 +132,9 @@ func plainDescription(value string) (string, []card, []descriptionPart) {
 				parts[0].text = strings.TrimLeftFunc(parts[0].text, unicode.IsSpace)
 				parts[len(parts)-1].text = strings.TrimRightFunc(parts[len(parts)-1].text, unicode.IsSpace)
 			}
+			if omitted {
+				parts = append(parts, descriptionPart{omitted: true})
+			}
 			return strings.TrimSpace(text.String()), links, parts
 		case html.StartTagToken, html.SelfClosingTagToken:
 			t := z.Token()
@@ -136,12 +150,7 @@ func plainDescription(value string) (string, []card, []descriptionPart) {
 				inAnchor, anchor = true, card{}
 				for _, attr := range t.Attr {
 					if attr.Key == "href" {
-						anchor = add(attr.Val)
-						if anchor.link == "" {
-							if target := descriptionExternalURL(attr.Val); target != "" {
-								anchor = card{link: target, title: target, external: true}
-							}
-						}
+						anchor = add(attr.Val, true)
 					}
 				}
 			}
@@ -181,7 +190,7 @@ func (b *browser) browseInMain(target string) {
 	}
 }
 
-func (b *browser) drawDescription(c *ui.Context, parts []descriptionPart) {
+func (b *browser) drawDescription(c *ui.Context, parts []descriptionPart, sources ...string) {
 	ui.RichText(c).Wrap().Children(func() {
 		for i, part := range parts {
 			if part.text == "" {
@@ -201,11 +210,32 @@ func (b *browser) drawDescription(c *ui.Context, parts []descriptionPart) {
 						c.Invalidate()
 					})
 				}
-			} else if ui.Link(c.Key(i), part.text, "").Label(part.link.title).Clicked() {
+			} else if ui.Link(c.Key(i), part.text, "").Label(strings.TrimSpace(part.text)).Description(part.link.title + " · " + descriptionAction(part.link.link)).Clicked() {
 				b.followDescription(part.link.link)
 			}
 		}
 	})
+	for _, part := range parts {
+		if !part.omitted {
+			continue
+		}
+		ui.Text(c, "一部のリンクを省略しています。公式プレーヤーの概要から残りを確認できます。").Wrap().Role(ui.RoleStatus)
+		source := b.current()
+		if len(sources) > 0 {
+			source = sources[0]
+		}
+		if routeFor(source).kind == screenVideo && ui.Button(c, "公式プレーヤーで概要を確認").Clicked() {
+			b.openPlayerMode(source, webPlayback)
+		}
+		break
+	}
+}
+
+func descriptionAction(target string) string {
+	if routeFor(target).kind == screenVideo {
+		return "動画を再生"
+	}
+	return "一覧を開く"
 }
 
 // External destinations are displayed and copied, never sent through the app's session.

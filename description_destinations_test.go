@@ -1,8 +1,11 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
+	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestDescriptionTagAndSearchDestinations(t *testing.T) {
@@ -38,5 +41,28 @@ func TestExternalDescriptionRejectsUnsafeURLs(t *testing.T) {
 	got := descriptionExternalURL("https://例え.jp/path")
 	if got != "https://xn--r8jz45g.jp/path" {
 		t.Fatal("international hostname not displayed as ASCII", got)
+	}
+}
+
+func TestDescriptionKnownLinksKeepTheirLimitWithExternalCopy(t *testing.T) {
+	var description strings.Builder
+	for i := 1; i <= 25; i++ {
+		fmt.Fprintf(&description, `<a href="%swatch/sm%d">動画</a> `, home, i)
+	}
+	description.WriteString(`<a href="https://example.invalid/">外部</a>`)
+	_, links, parts := plainDescription(description.String())
+	if len(links) != 24 {
+		t.Fatalf("got %d internal links, want 24", len(links))
+	}
+	var external, omitted bool
+	for _, part := range parts {
+		if part.link.link == home+"watch/sm25" {
+			t.Fatal("an omitted internal link became a copy action")
+		}
+		external = external || part.link.external
+		omitted = omitted || part.omitted
+	}
+	if !external || !omitted {
+		t.Fatal("external copy or internal link limit notice is missing")
 	}
 }

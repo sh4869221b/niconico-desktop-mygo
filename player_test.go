@@ -240,7 +240,7 @@ func TestDeletedHistoryReturnsOnWebBackToAnotherVideo(t *testing.T) {
 
 func TestPlayerShowsCommentLanguageWarningAlongsideStatus(t *testing.T) {
 	p := &playerWindow{status: "プレーヤーの状態", commentLanguageWarning: true}
-	view := ui.NewTester(p.draw, 640, 420)
+	view := ui.NewTester(func(c *ui.Context) { p.draw(c, nil) }, 640, 420)
 	if !view.HasText(p.status) || !view.HasText(commentLanguageWarning) {
 		t.Fatalf("player text: %v", view.Texts())
 	}
