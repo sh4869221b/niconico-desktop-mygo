@@ -392,6 +392,13 @@ func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {
 			}
 		}
 	}
+	if current.urlKey == "f" || current.urlKey == "n" {
+		direction := "新しい順"
+		if ascending {
+			direction = "古い順"
+		}
+		ui.Text(scope, direction).TextColor(scope.Theme().TextMuted)
+	}
 	if b.searchSortNotice != "" {
 		ui.Text(scope, b.searchSortNotice).Wrap()
 	}
@@ -452,6 +459,9 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 					}
 				} else if p.name != "" {
 					ui.Text(scope, p.name).SingleLine().Ellipsis("…").MaxWidth(240).MinWidth(0).Focusable().Tooltip(p.name)
+				}
+				if metric := item.searchMetric(b.navigation[b.index]); metric != "" {
+					ui.Text(scope, metric).TextColor(t.TextMuted).FontSize(12).Wrap()
 				}
 				b.drawVideoTags(scope, item.tags, "タグ情報なし")
 			}
