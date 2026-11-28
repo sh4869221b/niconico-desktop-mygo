@@ -24,7 +24,12 @@ type playerWindow struct {
 	failedWebTarget        string
 	replaceFailedWebView   bool
 	historySuppressed      map[string]bool
+	lastHistoryWrite       time.Time
+	lastHistoryCompleted   bool
+	saveHistory            func(bool)
 	historyVisitURL        string
+	historyVisitAt         time.Time
+	historyTarget          string // saved watch URL before applying a generated resume position
 	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
@@ -39,6 +44,7 @@ type playerWindow struct {
 func (p *playerWindow) resumeHistory(video string) {
 	delete(p.historySuppressed, video)
 	p.historyVisitURL = ""
+	p.historyVisitAt, p.lastHistoryWrite = time.Time{}, time.Time{}
 }
 
 func (p *playerWindow) visitWebVideo(video string) {
@@ -170,6 +176,10 @@ func (p *playerWindow) canFocusPlayback(route screenRoute, mode playbackMode, pa
 }
 
 func (b *browser) openPlayerMode(raw string, mode playbackMode) {
+	b.openPlayerWithHistoryTarget(raw, mode, "")
+}
+
+func (b *browser) openPlayerWithHistoryTarget(raw string, mode playbackMode, historyTarget string) {
 	if mode != nativePlayback {
 		mode = webPlayback
 	}
@@ -197,11 +207,17 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			}
 		}
 		if p := b.player; p != nil && p.mode != mode {
+			b.flushPlayerProgress(p)
+			if historyTarget == "" && raw == p.target {
+				historyTarget = p.historyTarget
+			}
 			b.player = nil
 			p.win.Close()
 		}
 		if p := b.player; p != nil {
+			b.flushPlayerProgress(p)
 			p.resumeHistory(route.link)
+			p.historyTarget = historyTarget
 			if p.mode == nativePlayback {
 				b.loadNativePlayer(p, route)
 				p.win.Show()
@@ -216,7 +232,7 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 			p.win.Focus()
 			return
 		}
-		p := &playerWindow{mode: mode, target: route.target, webVideo: route.link, status: "再生を準備しています…"}
+		p := &playerWindow{mode: mode, target: route.target, historyTarget: historyTarget, webVideo: route.link, status: "再生を準備しています…"}
 		p.win = mygo.NewWindow(mygo.WindowOptions{
 			StateKey: "player", Title: appName + " · プレーヤー",
 			Width: 1060, Height: 700, MinWidth: 560, MinHeight: 420,
@@ -225,6 +241,8 @@ func (b *browser) openPlayerMode(raw string, mode playbackMode) {
 		})
 		_ = p.win.SetIcon(appIconPNG)
 		b.player = p
+		p.saveHistory = func(force bool) { b.recordPlaybackProgress(p, time.Now(), force) }
+		p.win.OnClose(func(*mygo.CloseEvent) { b.flushPlayerProgress(p) })
 		p.win.OnClosed(func() {
 			// MyGo destroys WebViews owned by a closed window.
 			if b.player == p {
@@ -343,6 +361,9 @@ func (b *browser) attachPlayerUsing(p *playerWindow, create func(mygo.WebViewOpt
 		return b.browseFromPlayer(p, dest, false)
 	}
 	page.OnWillNavigate(func(e *mygo.NavigateEvent) {
+		if active() && p.saveHistory != nil {
+			p.saveHistory(true)
+		}
 		dest := routeFor(e.URL)
 		if !active() || allowedURL(e.URL) == nil || b.handoffWatch(p, dest) ||
 			(e.UserInitiated || dest.isSearchPage()) && routeLink(dest) {
@@ -521,6 +542,7 @@ func (b *browser) observePlayerPage(p *playerWindow, page *mygo.Page, active fun
 	if route.kind == screenVideo {
 		p.applyWebRestore(page, route)
 		p.captureWebPosition(page)
+		b.recordPlaybackProgress(p, time.Now(), false)
 		if !active() || d.loading || page.URL() != raw {
 			return
 		}
@@ -586,6 +608,9 @@ func (p *playerWindow) setWebTitle() {
 }
 
 func (p *playerWindow) load(target string) {
+	if p.saveHistory != nil {
+		p.saveHistory(true)
+	}
 	if p.view == nil || allowedURL(target) == nil {
 		return
 	}

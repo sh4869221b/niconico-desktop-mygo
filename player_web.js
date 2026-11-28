@@ -12,6 +12,7 @@
     let entryURL = location.href;
     let targetURL = entryURL;
     let lastSample;
+    let lastHistorySample;
     let pausedRestore;
 
     function removesWatchOptions() {
@@ -110,6 +111,9 @@
         if (video && (!target || target === video) && Number.isFinite(video.currentTime) && video.currentTime >= 0) {
             const url = entryURL === location.href ? targetURL : location.href;
             lastSample = [url, media.id, video.currentTime, video.paused || video.ended];
+            if (!video.seeking && Number.isFinite(video.duration) && video.duration >= 0) {
+                lastHistorySample = [...lastSample, video.duration, Boolean(video.ended)];
+            }
         }
     }
 
@@ -212,6 +216,6 @@
     }
 
     Object.defineProperty(window, '__nicoDesktopMedia', {
-        value: Object.freeze({snapshot() { remember(); return lastSample; }, restore})
+        value: Object.freeze({snapshot() { remember(); return lastSample; }, historySnapshot() { remember(); return lastHistorySample; }, restore})
     });
 })();
