@@ -148,6 +148,9 @@ func (b *browser) refreshNative() {
 			}
 			b.applyCatalogContext(r, &p)
 			b.presentNativeResult(p, err)
+			if err == nil {
+				b.updatePinTitle(r.target, b.currentTitle())
+			}
 			b.win.Invalidate()
 		})
 	}()

@@ -45,10 +45,7 @@ func makeEntry(raw, title string) (entry, bool) {
 	if title == "" {
 		title = u
 	}
-	if runes := []rune(title); len(runes) > 160 {
-		title = string(runes[:160])
-	}
-	e := entry{URL: u, Title: title, Kind: k}
+	e := entry{URL: u, Title: truncateEntryTitle(title), Kind: k}
 	r := routeFor(raw)
 	target, _ := url.Parse(u)
 	if r.kind == screenSearch {
@@ -160,4 +157,49 @@ func (e entry) openURL() string {
 		}
 	}
 	return e.URL
+}
+
+func (e entry) hasPlaceholderTitle() bool {
+	return e.URL != "" && e.Title == truncateEntryTitle(e.URL)
+}
+
+func truncateEntryTitle(title string) string {
+	const limit = 160
+	if len(title) <= limit {
+		return title
+	}
+	count := 0
+	for i := range title {
+		if count == limit {
+			return title[:i]
+		}
+		count++
+	}
+	return title
+}
+
+func (l library) pinTitleUpdate(e entry) int {
+	if e.hasPlaceholderTitle() {
+		return -1
+	}
+	return slices.IndexFunc(l.Pins, func(pin entry) bool {
+		if pin.URL != e.URL || pin.Title == e.Title || !pin.hasPlaceholderTitle() {
+			return false
+		}
+		switch e.Kind {
+		case "キーワード検索", "タグ検索":
+			return routeFor(pin.openURL()).page == routeFor(e.openURL()).page
+		default:
+			return true
+		}
+	})
+}
+
+func (l *library) fillPinTitle(e entry) bool {
+	i := l.pinTitleUpdate(e)
+	if i < 0 {
+		return false
+	}
+	l.Pins[i].Title = e.Title
+	return true
 }

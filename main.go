@@ -21,17 +21,22 @@ const appName = "Niconico Desktop MyGo"
 var version = "dev"
 
 type browser struct {
-	win                          *mygo.Window
-	web                          *mygo.WebView
-	source, title, status        string
-	searchInput                  searchInput
-	libraryPath, storeWarning    string
-	commentLanguageWarning       bool
-	data                         library
-	pendingLibraryEdits          []func(*library) bool
-	history, loaded, closed      bool
-	showLibrary                  bool
-	undoRemoval                  *libraryRemoval
+	win                       *mygo.Window
+	web                       *mygo.WebView
+	source, title, status     string
+	searchInput               searchInput
+	libraryPath, storeWarning string
+	commentLanguageWarning    bool
+	data                      library
+	pendingLibraryEdits       []func(*library) bool
+	history, loaded, closed   bool
+	showLibrary               bool
+	undoRemoval               *libraryRemoval
+
+	storageOpen, storageBusy, playbackBlocked bool
+	storageFiles                              []profileFile
+	storageNotice, ngReadWarning              string
+
 	layoutPath                   string
 	layoutLoadErr                error
 	focusSearch                  bool
@@ -45,6 +50,7 @@ type browser struct {
 	official, openingOfficial    bool
 	loginHelp                    bool
 	officialTarget               string
+	officialTitleSource          string
 	catalog                      catalog
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
@@ -115,12 +121,17 @@ func (b *browser) start(initial string) {
 			b.playMode = mode
 		} else {
 			b.playbackNotice = "再生設定を読み込めませんでした。既定の公式プレーヤーを使います。"
+			b.playbackBlocked = true
 		}
 		b.libraryPath = filepath.Join(dir, "NiconicoDesktopMyGo", "library.json")
-		b.commentNG, _ = loadCommentNG(filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json"))
+		ngPath := filepath.Join(dir, "NiconicoDesktopMyGo", "comment-ng.json")
+		b.commentNG, err = loadCommentNG(ngPath)
+		if err != nil {
+			b.ngReadWarning = "NG設定を読み込めません。元ファイルを保護しています: " + ngPath
+		}
 		b.data, err = loadLibrary(b.libraryPath)
 		if err != nil {
-			b.storeWarning = "既存の保存ファイルを読み込めません。上書きは行いません。"
+			b.storeWarning = "保存ファイルを読み込めません。上書きは行いません: " + b.libraryPath
 		}
 	} else {
 		b.storeWarning = "保存先を取得できません。"
@@ -243,7 +254,10 @@ func (b *browser) attachOfficial() {
 		if !active() {
 			return
 		}
-		b.title = e.Title
+		b.title, b.officialTitleSource = e.Title, p.URL()
+		if !p.IsLoading() {
+			b.updateOfficialPinTitle()
+		}
 		b.win.Invalidate()
 	})
 	p.OnDidFinishLoad(func() {
@@ -254,7 +268,7 @@ func (b *browser) attachOfficial() {
 		if b.playOfficialLink(view, raw, true) {
 			return
 		}
-		b.source, b.loaded = raw, allowedURL(raw) != nil
+		b.finishOfficialPage(raw)
 		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
 		b.status = "ニコニコ公式ページ"
@@ -294,7 +308,7 @@ func (b *browser) attachOfficial() {
 func (b *browser) loading() {
 	b.loaded = false
 	b.status = "読み込み中…"
-	b.title = ""
+	b.title, b.officialTitleSource = "", ""
 }
 
 func (b *browser) loadOfficial(target string) {
@@ -379,10 +393,15 @@ func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) 
 
 func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	e, ok := makeEntry(raw, title)
-	if b.player != p || !ok || e.Kind != "動画" || p.historySuppressed[e.URL] {
+	if p == nil || b.player != p || !ok || e.Kind != "動画" {
 		return
 	}
+	suppressHistory := p.historySuppressed[e.URL]
 	b.changeLibrary(func(data *library) bool {
+		pinUpdated := data.fillPinTitle(e)
+		if suppressHistory {
+			return pinUpdated
+		}
 		next := e
 		if next.Title == next.URL {
 			if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
@@ -390,7 +409,7 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 			}
 		}
 		if len(data.History) > 0 && data.History[0] == next {
-			return false
+			return pinUpdated
 		}
 		data.History = putFirst(data.History, next, 100)
 		return true
@@ -398,6 +417,23 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if b.win != nil {
 		b.win.Invalidate()
 	}
+}
+
+func (b *browser) updatePinTitle(raw, title string) {
+	if e, ok := makeEntry(raw, title); ok && b.storeWarning == "" && b.data.pinTitleUpdate(e) >= 0 {
+		b.changeLibrary(func(data *library) bool { return data.fillPinTitle(e) })
+	}
+}
+
+func (b *browser) updateOfficialPinTitle() {
+	if b.loaded && b.officialTitleSource == b.source {
+		b.updatePinTitle(b.source, b.title)
+	}
+}
+
+func (b *browser) finishOfficialPage(raw string) {
+	b.source, b.loaded = raw, allowedURL(raw) != nil
+	b.updateOfficialPinTitle()
 }
 
 func (b *browser) pinCurrent() {
@@ -409,23 +445,31 @@ func (b *browser) pinCurrent() {
 		b.status = b.storeWarning
 		return
 	}
-	var duplicate bool
-	changed, saved := b.changeLibrary(func(data *library) bool {
+	var added, renamed, duplicate bool
+	_, saved := b.changeLibrary(func(data *library) bool {
+		added, renamed = false, false
 		duplicate = slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL })
-		if duplicate || len(data.Pins) >= 500 {
+		if duplicate {
+			renamed = data.fillPinTitle(e)
+			return renamed
+		}
+		if len(data.Pins) >= 500 {
 			return false
 		}
 		data.Pins = putFirst(data.Pins, e, 500)
+		added = true
 		return true
 	})
-	if changed {
+	if added {
 		b.showLibrary = true
 	}
 	if saved {
 		switch {
+		case renamed:
+			b.status = "登録済みの仮の名前を更新しました。"
 		case duplicate:
 			b.status = "登録済みです。"
-		case changed:
+		case added:
 			b.status = e.Kind + "を登録しました。"
 		default:
 			b.status = "登録は500件までです。登録済みタブから不要な項目を削除してください。"
@@ -459,7 +503,8 @@ func (b *browser) draw(c *ui.Context) {
 			b.drawCloseHelp(c)
 		}
 		if b.showPlaybackSettings {
-			b.drawPlaybackSettings(c)
+			_, height := c.Size()
+			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
@@ -480,7 +525,7 @@ func (b *browser) draw(c *ui.Context) {
 				})
 			}
 		})
-		if b.undoRemoval != nil || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
+		if b.undoRemoval != nil || b.ngReadWarning != "" || b.status != "" || b.storeWarning != "" || b.official && b.commentLanguageWarning {
 			ui.Row(c).FillWidth().Wrap().Padding(5, 12).Gap(8).Background(t.Surface).Children(func() {
 				if b.undoRemoval != nil && ui.Button(c, "元に戻す").Clicked() {
 					b.undoLibraryRemoval()
@@ -490,6 +535,9 @@ func (b *browser) draw(c *ui.Context) {
 				}
 				if b.official && b.commentLanguageWarning {
 					ui.Text(c, commentLanguageWarning).TextColor(t.TextMuted).Wrap()
+				}
+				if b.ngReadWarning != "" {
+					ui.Text(c, b.ngReadWarning).TextColor(t.TextMuted).Wrap()
 				}
 				if b.storeWarning != "" {
 					ui.Text(c, b.storeWarning).TextColor(t.TextMuted).Wrap()
@@ -640,7 +688,11 @@ func (b *browser) sidebar(c *ui.Context) {
 				for _, item := range items {
 					row := c.Key(item.URL)
 					ui.Row(row).Gap(4).AlignItems(ui.Center).Children(func() {
-						if ui.Button(row, "["+item.Kind+"] "+item.Title).Tooltip(item.Title).Grow(1).MinWidth(0).Clicked() {
+						name := item.Title
+						if !b.history && item.hasPlaceholderTitle() {
+							name = "仮の名前: " + name
+						}
+						if ui.Button(row, "["+item.Kind+"] "+name).Tooltip(name).Grow(1).MinWidth(0).Clicked() {
 							b.navigate(item.openURL())
 						}
 						if ui.Button(row, "×").Label(libraryDeleteLabel(item, b.history)).Clicked() {
