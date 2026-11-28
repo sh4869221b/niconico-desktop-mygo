@@ -212,6 +212,15 @@ func (p *VideoPlayer) Pause() {
 	p.paused = true
 }
 
+// Paused reports the requested pause state. Ending, decoder failures, and
+// pauses imposed by visibility do not change the user's play/pause intent.
+func (p *VideoPlayer) Paused() bool {
+	if p.eng != nil {
+		return p.eng.paused
+	}
+	return p.paused
+}
+
 // Playing reports whether the video plays: neither paused nor ended. It
 // plays while out of sight too, though it does not move on then.
 func (p *VideoPlayer) Playing() bool {
