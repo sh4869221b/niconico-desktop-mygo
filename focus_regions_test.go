@@ -22,7 +22,7 @@ func TestJumpToResultsSkipsSavedRows(t *testing.T) {
 		if err := v.Click("結果へ移動"); err != nil {
 			t.Fatal(err)
 		}
-		if !v.Focused("結果・本文") {
+		if !v.Focused(p.title) {
 			t.Fatalf("could not skip %d saved rows", count)
 		}
 	}
@@ -37,7 +37,7 @@ func TestF6CyclesRegionsAndSkipsHiddenLibrary(t *testing.T) {
 		t.Fatal("F6 did not reach library")
 	}
 	v.Key(0, ui.KeyF6)
-	if !v.Focused("結果・本文") {
+	if !v.Focused("ニコニコ動画") {
 		t.Fatal("F6 did not reach content")
 	}
 	v.Key(ui.Shift, ui.KeyF6)
@@ -48,7 +48,7 @@ func TestF6CyclesRegionsAndSkipsHiddenLibrary(t *testing.T) {
 	v.Frame()
 	v.Key(ui.Ctrl, ui.KeyL)
 	v.Key(0, ui.KeyF6)
-	if !v.Focused("結果・本文") {
+	if !v.Focused("ニコニコ動画") {
 		t.Fatal("hidden library trapped focus")
 	}
 	v.Key(0, ui.KeyF6)
