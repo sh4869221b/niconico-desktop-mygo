@@ -210,6 +210,11 @@ func (b *browser) drawNative(c *ui.Context) {
 	ui.Column(scope).Bind(&b.contentRegion).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
 		if r.kind == screenHome {
 			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold().Focusable().Bind(&b.contentFocus)
+			ui.Text(scope, "ログインせずに動画を検索できます。上の入力欄にキーワードやタグを入力してください。").Wrap()
+			if ui.PrimaryButton(scope, "例：初音ミクを検索欄に入れる").Clicked() {
+				b.searchInput.field, b.focusSearch = "初音ミク", true
+			}
+			ui.Text(scope, "結果の画像は再生、タイトルは詳細を開きます。気に入ったページは「☆ 登録」で保存できます。").Wrap()
 			ui.Row(scope).Gap(8).Wrap().Children(func() {
 				if ui.Button(scope, "自分のマイリスト").Clicked() {
 					b.navigate(mylists)
@@ -307,6 +312,11 @@ func (b *browser) drawNative(c *ui.Context) {
 			return
 		}
 		if b.resultErr != nil {
+			if (r.kind == screenOwnLists || r.kind == screenOwnList) && !errors.Is(b.resultErr, errSignIn) {
+				if ui.Button(scope, "ログイン状態を再確認して再取得").Disabled(b.loginBusy).Clicked() {
+					b.checkLogin()
+				}
+			}
 			ui.Text(scope, b.resultErr.Error()).Wrap()
 			if !errors.Is(b.resultErr, errSignIn) && ui.Button(scope, "再試行").Clicked() {
 				b.refreshNative()
