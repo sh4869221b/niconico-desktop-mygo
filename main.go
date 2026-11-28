@@ -35,6 +35,12 @@ type browser struct {
 	libraryExpanded, focusContent bool
 	undoRemoval                   *libraryRemoval
 
+	historySettingsPath, historyPeriod, historyNotice string
+	historySettingsErr                                error
+	historyDisabled                                   bool
+	historySettingsChecked                            time.Time
+	historyErasePending                               []entry
+
 	storageOpen, storageBusy, playbackBlocked bool
 	storageFiles                              []profileFile
 	storageNotice, ngReadWarning              string
@@ -103,6 +109,8 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.historySettingsPath = filepath.Join(dir, "NiconicoDesktopMyGo", "history.json")
+		b.historyDisabled, b.historySettingsErr = loadHistoryRecording(b.historySettingsPath)
 		if prefs, err := loadNativeDisplay(b.nativeDisplayPath()); err == nil {
 			b.nativeDisplay = prefs
 		} else {
@@ -397,15 +405,24 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 		return
 	}
 	suppressHistory := p.historySuppressed[e.URL]
+	newVisit := p.historyVisitURL != e.URL
+	visitedAt := time.Now().UTC()
+	recording := false
 	b.changeLibrary(func(data *library) bool {
 		pinUpdated := data.fillPinTitle(e)
-		if suppressHistory {
+		recording = !suppressHistory && b.canRecordHistory()
+		if !recording {
 			return pinUpdated
 		}
 		next := e
-		if next.Title == next.URL {
-			if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
-				next.Title = data.History[i].Title
+		next.LastViewedAt = visitedAt
+		if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
+			previous := data.History[i]
+			if next.Title == next.URL {
+				next.Title = previous.Title
+			}
+			if !previous.LastViewedAt.IsZero() && (!newVisit || previous.LastViewedAt.After(visitedAt)) {
+				next.LastViewedAt = previous.LastViewedAt
 			}
 		}
 		if len(data.History) > 0 && data.History[0] == next {
@@ -414,6 +431,9 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 		data.History = putFirst(data.History, next, 100)
 		return true
 	})
+	if recording {
+		p.historyVisitURL = e.URL
+	}
 	if b.win != nil {
 		b.win.Invalidate()
 	}
@@ -505,6 +525,8 @@ func (b *browser) draw(c *ui.Context) {
 		if b.showPlaybackSettings {
 			_, height := c.Size()
 			ui.Scroll(c.Key("settings-panel")).FillWidth().MaxHeight(height * 0.45).Children(func() { b.drawPlaybackSettings(c) })
+		} else {
+			b.historySettingsChecked = time.Time{}
 		}
 		ui.Row(c).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
 			if b.showLibrary {
