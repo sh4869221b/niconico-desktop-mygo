@@ -385,29 +385,33 @@ func (b *browser) currentTitle() string {
 	return title
 }
 
-func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) {
-	if b.storeWarning != "" {
-		return edit(&b.data), false
-	}
-	var latest library
-	err := observeLibrary60("transaction", func() error {
-		return withSettingsLock(b.libraryPath, func() error {
+func persistLibraryEdits(path string, pendingEdits []func(*library) bool, edit func(*library) bool) (latest library, changed bool, err error) {
+	err = observeLibrary60("transaction", func() error {
+		return withSettingsLock(path, func() error {
 			var err error
-			latest, err = loadLibrary(b.libraryPath)
+			latest, err = loadLibrary(path)
 			if err != nil {
 				return err
 			}
 			dirty := false
-			for _, pending := range b.pendingLibraryEdits {
+			for _, pending := range pendingEdits {
 				dirty = pending(&latest) || dirty
 			}
 			changed = edit(&latest)
 			if dirty || changed {
-				return saveLibrary(b.libraryPath, latest)
+				return saveLibrary(path, latest)
 			}
 			return nil
 		})
 	})
+	return latest, changed, err
+}
+
+func (b *browser) changeLibrary(edit func(*library) bool) (changed, saved bool) {
+	if b.storeWarning != "" {
+		return edit(&b.data), false
+	}
+	latest, changed, err := persistLibraryEdits(b.libraryPath, b.pendingLibraryEdits, edit)
 	if err != nil {
 		changed = edit(&b.data)
 		if changed {

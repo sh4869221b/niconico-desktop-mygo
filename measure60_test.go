@@ -63,7 +63,7 @@ func observeLibrary60(stage string, action func() error) error {
 	return err
 }
 
-func drawMeasurement60(c *ui.Context, pins []entry, delay int, probe *string, resave, reset func(), observe func(ui.InputEvent)) {
+func drawMeasurement60(c *ui.Context, pins []entry, delay int, probe *string, resave, reset func(), observe func(ui.InputEvent), drawSaveStatus func()) {
 	ui.Column(c).Fill().Padding(8).Gap(8).ObserveInput(observe).Children(func() {
 		ui.Column(c).FillWidth().Shrink(0).Gap(8).Children(func() {
 			ui.Text(c, fmt.Sprintf("隔離プロファイル: %d 件 / 合成 Sync 遅延: %d ms", len(pins), delay)).Wrap()
@@ -76,6 +76,9 @@ func drawMeasurement60(c *ui.Context, pins []entry, delay int, probe *string, re
 				}
 				ui.TextInput(c, probe).Label("入力応答プローブ")
 			})
+			if drawSaveStatus != nil {
+				drawSaveStatus()
+			}
 			ui.Text(c, "保存と同時に Tab で移動し、下の登録一覧をスクロールしてください。").Wrap()
 		})
 		scroll := ui.Scroll(c.Key("measurement-library")).FillWidth().Grow(1).MinHeight(0)
@@ -113,7 +116,7 @@ func TestMeasurement60ControlsAreAboveTheFixtureList(t *testing.T) {
 					if ev.Kind == ui.InputScroll {
 						scrolls++
 					}
-				})
+				}, nil)
 			}, size[0], size[1])
 			click := func(label string) {
 				t.Helper()
@@ -144,6 +147,87 @@ func TestMeasurement60ControlsAreAboveTheFixtureList(t *testing.T) {
 	}
 }
 
+func TestMeasurement60ShowsAnErrorAndAllowsRetry(t *testing.T) {
+	q := &librarySaveQueue{retry: make(chan struct{}, 1)}
+	s := &librarySaveSession{queue: q, pending: 1}
+	s.receive(librarySaveResult{err: os.ErrPermission})
+	var probe string
+	v := ui.NewTester(func(c *ui.Context) {
+		drawMeasurement60(c, nil, 0, &probe, func() {}, func() {}, func(ui.InputEvent) {}, func() { drawStorageStatus60(c, s) })
+	}, 1000, 750)
+	status, ok := v.Access(s.message)
+	if !ok || status.Role != ui.RoleStatus || status.Offscreen || s.pending != 1 || !v.HasText("保存できませんでした") {
+		t.Fatalf("save failure is not visible and accessible: %+v", status)
+	}
+	if err := v.Click("保存を再試行"); err != nil {
+		t.Fatal(err)
+	}
+	v.Frame()
+	if len(q.retry) != 1 || s.failed || !v.HasText("保存を再試行しています") {
+		t.Fatal("retry did not request another save")
+	}
+}
+
+func TestMeasurement60AcceptsInputWhileAQueuedWriteIsBusy(t *testing.T) {
+	q := newLibrarySaveQueue(filepath.Join(t.TempDir(), "library.json"))
+	defer close(q.stop)
+	s := &librarySaveSession{queue: q}
+	started, release := make(chan struct{}), make(chan struct{})
+	var released sync.Once
+	unblock := func() { released.Do(func() { close(release) }) }
+	defer unblock()
+	pins := make([]entry, 100)
+	for i := range pins {
+		pins[i] = entry{URL: fmt.Sprint(i), Title: fmt.Sprintf("測定動画 %03d", i+1)}
+	}
+	var probe string
+	var tabs, scrolls int
+	v := ui.NewTester(func(c *ui.Context) {
+		drawMeasurement60(c, pins, 0, &probe, func() {
+			if !s.submit(librarySaveRequest{edit: func(*library) bool {
+				close(started)
+				<-release
+				return true
+			}}) {
+				t.Error("queue rejected the first write")
+			}
+		}, func() {}, func(ev ui.InputEvent) {
+			if ev.Kind == ui.InputKeyDown && ev.Key == ui.KeyTab {
+				tabs++
+			}
+			if ev.Kind == ui.InputScroll {
+				scrolls++
+			}
+		}, func() { drawStorageStatus60(c, s) })
+	}, 1000, 750)
+	if err := v.Click("500件を再保存"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("save worker never started")
+	}
+	v.Key(0, ui.KeyTab)
+	v.Key(0, ui.KeyTab)
+	if !v.Focused("入力応答プローブ") || tabs != 2 {
+		t.Fatal("Tab failed while the write held the transaction")
+	}
+	first, ok := v.Access(pins[0].Title)
+	if !ok || first.Offscreen {
+		t.Fatal("the first fixture row is outside the viewport")
+	}
+	v.Scroll(first.Bounds.X+10, first.Bounds.Y+5, 0, 500)
+	after, _ := v.Access(pins[0].Title)
+	if !after.Offscreen || scrolls != 1 || s.pending != 1 {
+		t.Fatal("the list did not scroll while the write remained queued")
+	}
+	unblock()
+	if result := nextLibrarySave(t, q); result.err != nil {
+		t.Fatal(result.err)
+	}
+}
+
 // Opt-in observation, not a pass/fail performance test. The selected root may
 // be a genuinely slow disk/share. Injection only demonstrates UI sensitivity.
 func TestMeasure60(t *testing.T) {
@@ -153,6 +237,13 @@ func TestMeasure60(t *testing.T) {
 	root := os.Getenv("MYGO_STORAGE_ROOT")
 	if root == "" {
 		t.Fatal("set MYGO_STORAGE_ROOT to a dedicated test directory/volume")
+	}
+	mode := os.Getenv("MYGO_STORAGE_MODE")
+	if mode == "" {
+		mode = "sync"
+	}
+	if mode != "sync" && mode != "async" {
+		t.Fatal("MYGO_STORAGE_MODE must be sync or async")
 	}
 	ms := 0
 	if value := os.Getenv("MYGO_STORAGE_DELAY_MS"); value != "" {
@@ -175,14 +266,17 @@ func TestMeasure60(t *testing.T) {
 	defer f.Close()
 	defer func() {
 		encoder := json.NewEncoder(f)
-		for _, row := range storage60.rows {
+		storage60.Lock()
+		rows := slices.Clone(storage60.rows)
+		storage60.Unlock()
+		for _, row := range rows {
 			if err := encoder.Encode(row); err != nil {
 				t.Error(err)
 				break
 			}
 		}
 	}()
-	event60("config", map[string]any{"directory": dir, "synthetic_delay_ms": ms, "go": runtime.Version(), "os": runtime.GOOS})
+	event60("config", map[string]any{"directory": dir, "synthetic_delay_ms": ms, "go": runtime.Version(), "os": runtime.GOOS, "mode": mode})
 	var fixture []entry
 	for i := 0; i < 500; i++ {
 		fixture = append(fixture, entry{URL: fmt.Sprintf("https://www.nicovideo.jp/watch/sm%d", i+1), Title: fmt.Sprintf("測定動画 %03d", i+1), Kind: "動画"})
@@ -193,8 +287,18 @@ func TestMeasure60(t *testing.T) {
 		t.Fatal(err)
 	}
 	event60("fixture-end", map[string]any{"pins": len(fixture)})
+	var async *librarySaveSession
+	if mode == "async" {
+		async = &librarySaveSession{queue: newLibrarySaveQueue(b.libraryPath)}
+		defer close(async.queue.stop)
+	}
 	save := func(operation string, edit func(*library) bool) {
 		start := time.Now()
+		if async != nil {
+			accepted := async.submit(librarySaveRequest{label: operation, enqueuedAt: start, edit: edit})
+			event60("save-queued", map[string]any{"operation": operation, "accepted": accepted})
+			return
+		}
 		event60("save-start", map[string]any{"operation": operation, "pins": len(b.data.Pins)})
 		changed, saved := b.changeLibrary(edit)
 		event60("save-end", map[string]any{"operation": operation, "pins": len(b.data.Pins), "elapsed_ns": time.Since(start).Nanoseconds(), "changed": changed, "saved": saved})
@@ -218,6 +322,16 @@ func TestMeasure60(t *testing.T) {
 			if c.Shortcut(0, ui.KeyF8) {
 				event60("probe-handled", map[string]any{})
 			}
+			var drawSaveStatus func()
+			if async != nil {
+				b.data = collectStorageResults60(async, b.data)
+				if async.finishClose(now) {
+					go mygo.RunOnMain(func() { b.win.Close() })
+				}
+				drawSaveStatus = func() {
+					drawStorageStatus60(c, async)
+				}
+			}
 			drawMeasurement60(c, b.data.Pins, ms, &probe, func() {
 				save("resave", func(*library) bool { return true })
 			}, func() {
@@ -232,9 +346,17 @@ func TestMeasure60(t *testing.T) {
 				case ev.Kind == ui.InputScroll:
 					event60("scroll-delivered", map[string]any{"dx": ev.DX, "dy": ev.DY})
 				}
-			})
+			}, drawSaveStatus)
 			c.After(16 * time.Millisecond)
 		})})
+		if async != nil {
+			b.win.OnClose(func(event *mygo.CloseEvent) {
+				if !async.requestClose(time.Now()) {
+					event.PreventDefault()
+					b.win.Invalidate()
+				}
+			})
+		}
 		b.win.OnClosed(func() { b.closed = true; mygo.App.Quit() })
 	})
 	t.Logf("isolated profile: %s", dir)
@@ -242,6 +364,9 @@ func TestMeasure60(t *testing.T) {
 	measure60Run <- result
 	if err := <-result; err != nil {
 		t.Fatal(err)
+	}
+	if async != nil && async.pending != 0 {
+		t.Fatal("the measurement window closed with unacknowledged edits")
 	}
 	got, err := loadLibrary(b.libraryPath)
 	if err != nil {
@@ -262,4 +387,32 @@ func TestMeasure60(t *testing.T) {
 	}
 	storage60.Unlock()
 	event60("final", map[string]any{"pins": len(got.Pins), "events": counts})
+}
+
+func collectStorageResults60(s *librarySaveSession, data library) library {
+	for {
+		select {
+		case result := <-s.queue.results:
+			s.receive(result)
+			fields := map[string]any{"operation": result.request.label, "queued_utc_ns": result.request.enqueuedAt.UnixNano(),
+				"finished_utc_ns": result.finished.UnixNano(), "elapsed_ns": result.finished.Sub(result.request.enqueuedAt).Nanoseconds(),
+				"changed": result.changed, "saved": result.err == nil}
+			if result.err == nil {
+				data = result.library
+				fields["pins"] = len(data.Pins)
+			}
+			event60("save-end", fields)
+		default:
+			return data
+		}
+	}
+}
+
+func drawStorageStatus60(c *ui.Context, s *librarySaveSession) {
+	if s.message != "" {
+		ui.Text(c, s.message).Role(ui.RoleStatus).Wrap()
+	}
+	if s.failed && ui.Button(c, "保存を再試行").Clicked() {
+		s.retry()
+	}
 }

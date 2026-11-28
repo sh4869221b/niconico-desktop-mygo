@@ -4,7 +4,15 @@
 [PR #84](https://github.com/sh4869221b/niconico-desktop-mygo/pull/84) の main マージ `5527c6ce5c80ba0382f23b64ca66103d360900a1` 以降の `changeLibrary` に合わせた。実測するこの PR の exact head と、取り込まれている main の exact SHA を記録する。
 NucBox では `29718170f578dce699f34f7300e6551c7bfb86a5` の測定用レイアウトで一覧が上部の保存ボタンに重なり、クリック先のサンプル行から未構成のカタログ処理が呼ばれた。測定試料は取得できなかった。修正版は上部の操作領域と一覧のビューポートを分け、サンプル行のフォーカスとスクロールだけを許可する。
 
-同期保存を非同期化する修正は入れていない。Windows / Go 1.27.3+ で実行する。
+Windows / Go 1.27.3+ で実行します。
+
+## 比較用の非同期候補
+
+通常の MyGo は同期保存を使います。測定用 EXE は `MYGO_STORAGE_MODE=async` を指定すると、同じロック・再読込・Sync・置換を、単一の保存ワーカーで順番に実行します。未指定または `sync` で同期測定を再現できます。
+
+ワーカーは受け付けた編集を先頭から処理します。失敗時はその編集と後続を保留し、「保存を再試行」で先頭をやり直します。「保存しました」は永続化の成功を受け取った後に表示します。未確認の編集がある状態で閉じると最大 2 秒だけ UI を動かしたまま待機します。失敗または時間超過時は窓に状態を表示して操作を保持します。
+
+この候補で使う編集は測定専用の再保存・復元です。製品 UI の登録・削除・取り消し・履歴操作をワーカーへ接続する前に、終了時の動作と永続化を NucBox で比較します。
 
 ## 実行
 
@@ -18,7 +26,7 @@ $env:MYGO_STORAGE_ROOT = "$PWD/storage60"
 $env:MYGO_STORAGE_TRACE = "$PWD/storage60-baseline.jsonl"
 $env:MYGO_STORAGE_DELAY_MS = '0'
 go test -mod=readonly -tags mygo_measure60 -c -o measure60.test.exe .
-.\measure60.test.exe -test.run '^TestMeasurement60ControlsAreAboveTheFixtureList$' -test.v
+.\measure60.test.exe -test.run '^Test(LibrarySaveQueue|LibraryCloseWait|Measurement60)' -test.v
 .\measure60.test.exe -test.run '^TestMeasure60$' -test.v -test.timeout=0
 ```
 
@@ -49,6 +57,8 @@ powershell -NoProfile -File tools/issue60/probe.ps1 -ProcessId <上で確認し�
 
 ログ名は毎回変える。既存ログの上書きは拒否する。`save-end.elapsed_ns` は UI 操作から保存完了まで、`storage.stage=transaction` はロック取得・再読込・編集・保存を含む。個々の `write` / `sync` / `close` / `rename` と、F8 の入力応答、Tab／スクロールの描画待ちを別集計にする。合成条件の `transaction` と `save-end` には注入した待ち時間が含まれる。
 
+同期測定が終わったら、別のログ名にし、`$env:MYGO_STORAGE_MODE = 'async'` を付けて同じ 0 / 250 / 1000 ms 条件を再実行します。`save-queued.accepted` は受付、`save-end.saved` は永続化結果です。`save-end.queued_utc_ns` と `finished_utc_ns` を、Tab・ホイール・F8 が配信された時刻と照合します。保存直後の閉じる操作では、時間超過後に窓が残ることと、保存成功を確認した後に閉じて終了時の照合が通ることを記録します。
+
 | 条件 | persist 回数 | Write / Sync / Rename ms（中央値・最大） | 最大 frame gap ms | プローブ遅延 ms（中央値・最大） | Tab / scroll の録画結果 |
 |---|---:|---:|---:|---:|---|
 | SSD / delay 0 | 未測定 | 未測定 | 未測定 | 未測定 | 未測定 |
@@ -65,5 +75,5 @@ frame は約 16 ms 間隔で要求した view build の観測であり、OS の�
 - [ ] NucBox: 実低速領域の測定（領域が無い場合は未検証を維持）
 - [ ] 再現後の製品修正・保存順/終了時 flush/エラー表示の回帰検証
 
-終了後、測定プロセスとログを確認し、`Remove-Item Env:MYGO_STORAGE_ROOT,Env:MYGO_STORAGE_TRACE,Env:MYGO_STORAGE_DELAY_MS`。
+終了後、測定プロセスとログを確認し、設定した環境変数 `MYGO_STORAGE_ROOT`、`MYGO_STORAGE_TRACE`、`MYGO_STORAGE_DELAY_MS`、`MYGO_STORAGE_MODE` を取り除きます。
 不要な専用 `mygo-issue60-*` だけ削除する。APPDATA・本番の library.json・OS 設定は変更しない。
