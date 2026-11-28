@@ -15,9 +15,10 @@ func TestKeyboardCanNGSelectedCommentAndFocusNext(t *testing.T) {
 	defer s.Close()
 	s.Pause()
 	n := &nativePlayer{stream: s, recorded: true, allComments: []timedComment{
-		{VposMs: 1000, Body: "first", author: commentAuthor{ID: "1"}},
+		{VposMs: 1000, Body: "first", author: commentAuthor{ID: "2"}},
 		{VposMs: 2000, Body: "target", author: commentAuthor{ID: "2"}},
 		{VposMs: 3000, Body: "next unknown"},
+		{VposMs: 4000, Body: "after next", author: commentAuthor{ID: "3"}},
 	}}
 	n.applyCommentNG(nil)
 	b := &browser{commentNG: commentNG{path: filepath.Join(t.TempDir(), "ng.json")}}
@@ -54,8 +55,8 @@ func TestKeyboardCanNGSelectedCommentAndFocusNext(t *testing.T) {
 	if !b.commentNG.blocked[commentAuthor{ID: "2"}] || len(n.commentRows) != 2 {
 		t.Fatal("did not block selected author")
 	}
-	if n.selectedComment != 1 || !v.Focused("コメント一覧の行") {
-		t.Fatalf("did not focus next row: %d", n.selectedComment)
+	if n.selectedComment != 0 || n.commentRows[n.selectedComment] != 2 || !v.Focused("コメント一覧の行") {
+		t.Fatalf("did not focus the next surviving row after removing both comments: %d, rows=%v", n.selectedComment, n.commentRows)
 	}
 	v.Key(0, ui.KeyContextMenu)
 	if err := v.ChooseMenuItem("このユーザーを NG"); err == nil {

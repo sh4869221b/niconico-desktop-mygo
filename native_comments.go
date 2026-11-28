@@ -145,12 +145,13 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 	ui.List(c, &n.commentList, len(n.commentRows), func(i int) {
 		row := n.allComments[n.commentRows[i]]
 		line := ui.Row(c).FillWidth().AlignItems(ui.Start).Padding(3, 4).Gap(6)
-		if i == n.selectedComment {
-			// The list paints the selection behind this row's content.
-		} else if row.VposMs == group {
-			line.Background(t.Selection)
-		} else if i%2 == 0 {
-			line.Background(t.Surface)
+		// The list paints the selection behind this row's content.
+		if i != n.selectedComment {
+			if row.VposMs == group {
+				line.Background(t.Selection)
+			} else if i%2 == 0 {
+				line.Background(t.Surface)
+			}
 		}
 		line.ContextMenu(func(m *ui.Menu) {
 			n.follow.manual = true
