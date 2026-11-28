@@ -42,6 +42,14 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	displayPending        bool
+
+	metadataCtx                      context.Context
+	metadataRoute                    screenRoute
+	metadataWatch                    watchData
+	tagLoading, tagFailed            bool
+	commentsLoading, commentsFailed  bool
+	tagGeneration, commentGeneration uint64
 }
 
 const defaultNativeVolume = 80
@@ -69,7 +77,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &nativePlayer{
 		descriptionSource: route.target, cancel: cancel, loadingStream: true, status: "配信を準備しています…", startAt: route.startTime(),
-		showComments: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
+		showComments: true, displayPending: true, commentNotice: "コメントを読み込んでいます…", tagNotice: "タグを読み込んでいます…",
 	}
 	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
@@ -101,7 +109,7 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 			} else if n.stream, err = video.OpenURL(local); err != nil {
 				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
-				n.stream.SetVolume(b.nativeVolume / 100)
+				b.applyNativeAudio(n.stream)
 				if n.stream.PrepareStart(n.startAt) {
 					n.startAt = 0
 				}
@@ -117,39 +125,14 @@ func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
 		if err != nil || ctx.Err() != nil {
 			return
 		}
-		go func() {
-			tags, publisher, err := playbackDetails(ctx, b.catalog, route, source.watch)
-			mygo.RunOnMain(func() {
-				if active() && ctx.Err() == nil {
-					n.tags, n.tagNotice = tags, "タグはありません。"
-					n.publisher = publisher
-					if err != nil {
-						n.tagNotice = "タグを取得できませんでした。"
-					}
-					p.win.Invalidate()
-				}
-			})
-		}()
 		_, _, description := plainDescription(source.watch.Video.Description)
 		mygo.RunOnMain(func() {
 			if active() && ctx.Err() == nil {
+				n.metadataCtx, n.metadataRoute, n.metadataWatch = ctx, route, source.watch
 				n.description = description
 				p.win.Invalidate()
-			}
-		})
-		comments, err := nativeComments(ctx, source.watch)
-		details := &nativeCommentData{rows: comments, cues: makeDanmakuCues(comments)}
-		if err != nil {
-			details.notice = "コメントを取得できませんでした。"
-		} else if len(comments) == 0 {
-			details.notice = "表示できる日本語コメントはありません。"
-		} else if len(comments) == 15000 {
-			details.notice = "取得したコメントのうち15,000件まで表示しています。"
-		}
-		mygo.RunOnMain(func() {
-			if active() && ctx.Err() == nil {
-				n.stagedComments = details
-				p.win.Invalidate()
+				b.fetchNativeTags(p, n)
+				b.fetchNativeComments(p, n)
 			}
 		})
 	}()
@@ -232,6 +215,10 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		p.draw(c, func(mode playbackMode) { b.recoverPlayer(p, mode) })
 		return
 	}
+	if n.displayPending {
+		b.applyNativeDisplay(n, c.Preferences().ReduceMotion)
+		n.displayPending = false
+	}
 	t := c.Theme()
 	w, h := c.Size()
 	b.applyPendingCommentNG(n)
@@ -242,11 +229,18 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if ui.Button(c, "公式 WebView で開く").Clicked() {
 					b.openPlayerMode(p.target, webPlayback)
 				}
-				if n.stream != nil && ui.Button(c, "コメント切替").Label("コメント表示切替").Clicked() {
+				if n.stream != nil && ui.Button(c, "弾幕を表示").Checked(n.showComments).Clicked() {
 					n.showComments = !n.showComments
+					b.nativeDisplay.Danmaku = "hide"
+					if n.showComments {
+						b.nativeDisplay.Danmaku = "show"
+					}
+					b.saveNativeDisplay()
 				}
 				if n.stream != nil && ui.Button(c, "コメント一覧").Checked(!n.hideCommentPanel).Clicked() {
 					n.hideCommentPanel = !n.hideCommentPanel
+					b.nativeDisplay.HideComments = n.hideCommentPanel
+					b.saveNativeDisplay()
 					n.follow.positioned = false
 				}
 				if n.loadingStream {
@@ -259,6 +253,9 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					}
 				}
 			})
+			if b.nativeDisplayNotice != "" {
+				ui.Text(c, b.nativeDisplayNotice).Role(ui.RoleStatus).Wrap()
+			}
 		})
 		s := n.stream
 		if s != nil {
@@ -343,6 +340,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if ui.Slider(c, &volume, 0, 100).Step(1).Width(94).Label("音量").Changed() {
 					b.nativeVolume = volume
 					s.SetVolume(volume / 100)
+					b.saveNativeAudio()
 				}
 				ui.Text(c, fmt.Sprintf("音量 %d%%", int(volume+0.5))).Width(68).TextAlign(ui.End)
 				mute := "ミュート"
@@ -351,9 +349,14 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				}
 				if ui.Button(c, mute).Clicked() {
 					s.SetMuted(!s.Muted())
+					b.nativeMuted = s.Muted()
+					b.saveNativeAudio()
 				}
 			})
 		})
+		if b.nativeAudioNotice != "" {
+			ui.Text(c, b.nativeAudioNotice).Role(ui.RoleStatus).Wrap()
+		}
 	})
 }
 
@@ -412,6 +415,8 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 				}
 				if ui.Button(c.Key("overview-toggle"), label).Checked(n.showOverview).Clicked() {
 					n.showOverview = !n.showOverview
+					b.nativeDisplay.ShowOverview = n.showOverview
+					b.saveNativeDisplay()
 				}
 				if p := n.publisher; p != (videoPublisher{}) {
 					if p.name != "" {
@@ -430,6 +435,9 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 			})
 			if n.tagNotice != "" {
 				b.drawVideoTags(c, n.tags, n.tagNotice)
+			}
+			if n.tagFailed && ui.Button(c, "タグを再取得").Disabled(n.tagLoading).Clicked() {
+				b.fetchNativeTags(b.player, n)
 			}
 		})
 	})
