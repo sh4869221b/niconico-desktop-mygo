@@ -1,13 +1,18 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
 	"path/filepath"
+	"slices"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestLibraryDeletionNamesTarget(t *testing.T) {
 	b := &browser{index: -1, closed: true, showLibrary: true, libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{Pins: []entry{{URL: home + "watch/sm9", Title: "作品名", Kind: "動画"}}}}
+	if err := saveLibrary(b.libraryPath, b.data); err != nil {
+		t.Fatal(err)
+	}
 	v := ui.NewTester(b.draw, 1000, 700)
 	if err := v.Click("作品名を登録から削除"); err != nil {
 		t.Fatal(err)
@@ -30,6 +35,9 @@ func TestLibraryUndoRestoresOriginalOrderAndPersistence(t *testing.T) {
 		} else {
 			b.data.Pins = entries
 		}
+		if err := saveLibrary(b.libraryPath, b.data); err != nil {
+			t.Fatal(err)
+		}
 		b.remove(entries[1])
 		// Switching the visible collection must not change the undo destination.
 		b.history = !history
@@ -45,7 +53,7 @@ func TestLibraryUndoRestoresOriginalOrderAndPersistence(t *testing.T) {
 		if history {
 			got = saved.History
 		}
-		if len(got) != 3 || got[1].URL != entries[1].URL {
+		if !slices.Equal(got, entries) {
 			t.Fatalf("order not restored: %+v", got)
 		}
 		if b.player.historySuppressed[entries[1].URL] {
@@ -59,17 +67,53 @@ func TestUndoLastRowKeepsOrderAfterNewEntry(t *testing.T) {
 	bEntry, _ := makeEntry(home+"watch/sm2", "B")
 	cEntry, _ := makeEntry(home+"watch/sm3", "C")
 	d, _ := makeEntry(home+"watch/sm4", "D")
-	b := &browser{libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{Pins: []entry{a, bEntry, cEntry}}}
-	b.remove(cEntry)
-	b.data.Pins = putFirst(b.data.Pins, d, 500)
-	b.undoLibraryRemoval()
-	want := []entry{d, a, bEntry, cEntry}
-	if len(b.data.Pins) != len(want) {
-		t.Fatal("undo lost an entry")
-	}
-	for i, e := range want {
-		if b.data.Pins[i] != e {
-			t.Fatal("new entry changed restored order", b.data.Pins)
-		}
+	for _, test := range []struct {
+		name    string
+		history bool
+	}{
+		{name: "pins"},
+		{name: "history", history: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			b := &browser{index: -1, closed: true, showLibrary: true, history: test.history, libraryPath: filepath.Join(t.TempDir(), "library.json")}
+			if test.history {
+				b.data.History = []entry{a, bEntry, cEntry}
+			} else {
+				b.data.Pins = []entry{a, bEntry, cEntry}
+			}
+			if err := saveLibrary(b.libraryPath, b.data); err != nil {
+				t.Fatal(err)
+			}
+			v := ui.NewTester(b.draw, 1000, 700)
+			if err := v.Click(libraryDeleteLabel(cEntry, test.history)); err != nil {
+				t.Fatal(err)
+			}
+			other := &browser{libraryPath: b.libraryPath}
+			_, saved := other.changeLibrary(func(data *library) bool {
+				if test.history {
+					data.History = putFirst(data.History, d, 100)
+				} else {
+					data.Pins = putFirst(data.Pins, d, 500)
+				}
+				return true
+			})
+			if !saved {
+				t.Fatal("could not save the new entry")
+			}
+			if err := v.Click("元に戻す"); err != nil {
+				t.Fatal(err)
+			}
+			latest, err := loadLibrary(b.libraryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := latest.Pins
+			if test.history {
+				got = latest.History
+			}
+			if want := []entry{d, a, bEntry, cEntry}; !slices.Equal(got, want) {
+				t.Fatalf("restored order: %+v, want %+v", got, want)
+			}
+		})
 	}
 }
