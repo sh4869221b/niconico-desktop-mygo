@@ -42,6 +42,7 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	showKeys              bool
 	displayPending        bool
 
 	metadataCtx                      context.Context
@@ -226,6 +227,17 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		ui.Scroll(c.Key("player-toolbar")).FillWidth().MaxHeight(h * 0.15).Shrink(0).Children(func() {
 			ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "独自プレーヤー（試験版）").Bold()
+				fullscreen := "全画面"
+				if p.win != nil && p.win.IsFullScreen() {
+					fullscreen = "全画面を解除"
+				}
+				fullscreenButton := ui.Button(c, fullscreen).Tooltip("F11: 全画面切替 / Esc: 解除").Disabled(p.win == nil)
+				if playerToggleButton(c, fullscreenButton) {
+					p.win.ToggleFullScreen()
+				}
+				if ui.Button(c, "操作キー").Checked(n.showKeys).Clicked() {
+					n.showKeys = !n.showKeys
+				}
 				if ui.Button(c, "公式 WebView で開く").Clicked() {
 					b.openPlayerMode(p.target, webPlayback)
 				}
@@ -248,11 +260,14 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 					if n.pauseRequested {
 						label = "再生"
 					}
-					if ui.Button(c, label).Clicked() {
+					if playerToggleButton(c, ui.Button(c, label).Tooltip("Space: 再生・一時停止")) {
 						n.pauseRequested = !n.pauseRequested
 					}
 				}
 			})
+			if n.showKeys {
+				ui.Text(c, "Space: 再生・一時停止 / M: ミュート / F11: 全画面切替 / Esc: 全画面解除。フォーカス中のボタン・コメント一覧・メニュー・スライダーの操作を優先します。").Wrap()
+			}
 			if b.nativeDisplayNotice != "" {
 				ui.Text(c, b.nativeDisplayNotice).Role(ui.RoleStatus).Wrap()
 			}
@@ -327,7 +342,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if s.Playing() {
 					label = "一時停止"
 				}
-				if ui.Button(c, label).Clicked() {
+				if playerToggleButton(c, ui.Button(c, label).Tooltip("Space: 再生・一時停止")) {
 					toggleNativePlayback(s)
 				}
 				seconds := current.Seconds()
@@ -347,10 +362,8 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if s.Muted() {
 					mute = "ミュート解除"
 				}
-				if ui.Button(c, mute).Clicked() {
-					s.SetMuted(!s.Muted())
-					b.nativeMuted = s.Muted()
-					b.saveNativeAudio()
+				if playerToggleButton(c, ui.Button(c, mute).Tooltip("M: ミュート切替")) {
+					b.toggleNativeMute(s)
 				}
 			})
 		})
@@ -358,6 +371,43 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			ui.Text(c, b.nativeAudioNotice).Role(ui.RoleStatus).Wrap()
 		}
 	})
+	if !c.FocusTakesText() && !n.commentList.FocusWithin(c) {
+		if playerToggleShortcut(c, ui.KeySpace) {
+			if n.stream != nil {
+				toggleNativePlayback(n.stream)
+			} else if n.loadingStream {
+				n.pauseRequested = !n.pauseRequested
+			}
+		}
+		if n.stream != nil && playerToggleShortcut(c, ui.KeyM) {
+			b.toggleNativeMute(n.stream)
+		}
+	}
+	if p.win != nil {
+		if playerToggleShortcut(c, ui.KeyF11) {
+			p.win.ToggleFullScreen()
+		}
+		if p.win.IsFullScreen() && playerToggleShortcut(c, ui.KeyEscape) {
+			p.win.SetFullScreen(false)
+		}
+	}
+}
+
+func playerToggleShortcut(c *ui.Context, key ui.Key) bool {
+	return c.Shortcut(0, key) && !c.ShortcutRepeated()
+}
+
+func playerToggleButton(c *ui.Context, button ui.Element) bool {
+	// Handle activation keys before the button turns them into clicks.
+	space := button.Shortcut(0, ui.KeySpace) && !c.ShortcutRepeated()
+	enter := button.Shortcut(0, ui.KeyEnter) && !c.ShortcutRepeated()
+	return button.Clicked() || space || enter
+}
+
+func (b *browser) toggleNativeMute(s *ui.VideoPlayer) {
+	s.SetMuted(!s.Muted())
+	b.nativeMuted = s.Muted()
+	b.saveNativeAudio()
 }
 
 func toggleNativePlayback(s *ui.VideoPlayer) {
