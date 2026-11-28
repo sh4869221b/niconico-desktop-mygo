@@ -2,6 +2,7 @@
 
 状態: **実機の操作・低速条件は未検証**。旧基点 `45edceb24d62b7822e050ca19ff6689f0ca44224` では NucBox で専用500件の初期書き込みと終了を確認した。保存ボタン、入力応答、250/1000ms の試行はなく、旧基点の値は完了判定に使わない。
 [PR #84](https://github.com/sh4869221b/niconico-desktop-mygo/pull/84) の main マージ `5527c6ce5c80ba0382f23b64ca66103d360900a1` 以降の `changeLibrary` に合わせた。実測するこの PR の exact head と、取り込まれている main の exact SHA を記録する。
+NucBox では `29718170f578dce699f34f7300e6551c7bfb86a5` の測定用レイアウトで一覧が上部の保存ボタンに重なり、クリック先のサンプル行から未構成のカタログ処理が呼ばれた。測定試料は取得できなかった。修正版は上部の操作領域と一覧のビューポートを分け、サンプル行のフォーカスとスクロールだけを許可する。
 
 同期保存を非同期化する修正は入れていない。Windows / Go 1.27.3+ で実行する。
 
@@ -9,7 +10,7 @@
 
 このブランチの `git rev-parse HEAD` と `git merge-base HEAD origin/main`、Windows のビルド、CPU、対象ドライブの種類（SSD/USB/共有等）を記録。
 本番プロファイルは使わない。テストは指定フォルダー内に `mygo-issue60-ランダム名` を新規作成し、500 件の専用 library.json を生成する。
-再保存・復元は `changeLibrary` を経由し、削除は本番の sidebar / `remove` / `changeLibrary` を呼ぶ。ネットワーク・WebView・認証は使わない。
+再保存・復元は本番と同じ `changeLibrary` を経由する。一覧のサンプル行には遷移や削除の処理がなく、ネットワーク・WebView・認証は使わない。
 
 ```powershell
 New-Item -ItemType Directory storage60
@@ -17,12 +18,13 @@ $env:MYGO_STORAGE_ROOT = "$PWD/storage60"
 $env:MYGO_STORAGE_TRACE = "$PWD/storage60-baseline.jsonl"
 $env:MYGO_STORAGE_DELAY_MS = '0'
 go test -mod=readonly -tags mygo_measure60 -c -o measure60.test.exe .
+.\measure60.test.exe -test.run '^TestMeasurement60ControlsAreAboveTheFixtureList$' -test.v
 .\measure60.test.exe -test.run '^TestMeasure60$' -test.v -test.timeout=0
 ```
 
 - ウィンドウを 1000×750 程度にし、「500件を再保存」を 10 回操作。
 - 保存と同時に Tab を押してフォーカス移動し、一覧をホイールでスクロール。`tab-delivered` / `scroll-delivered` は UI へ届いた時刻。キーを押す／ホイールを回す時刻と、フォーカス枠／一覧が実際に変化した時刻は録画で記録する。
-- 左側の「削除」でも保存する。削除後は「500件に戻して保存」で初期件数へ戻す。
+- 「500件に戻して保存」は同じ専用フィクスチャを置き直し、保存の観測に使える。
 - 各試行の操作、保存件数、操作感、エラーを記録し、2 分以内にウィンドウを閉じる。JSONL は閉じると出力される（ディスク上の観測ログによる測定対象 I/O への干渉を避けるためメモリーに蓄積）。
 - 終了時に library.json を再読込し、名前・順序を含む登録と履歴がメモリーと異なる場合はテストが失敗する。`fixture-start`～`fixture-end` は初期書き込み。操作試料から除く。`final.events` で保存、F8、Tab、スクロールの記録件数を確認する。初期書き込みと起動だけなら操作応答は未計測。
 
