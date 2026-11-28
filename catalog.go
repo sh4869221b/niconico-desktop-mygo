@@ -22,6 +22,9 @@ const publicMylistPageSize = 100
 const maxCatalogPage = 4166 // zero based, preserves the accepted range of existing browse links
 const responseLimit = 4 << 20
 
+var errSessionUnavailable = errors.New("ログイン情報を確認できません。ログイン状態を再確認してください")
+var errAccessDenied = errors.New("この一覧を閲覧する権限がありません。アカウントと公開設定を確認してください")
+
 var errSignIn = errors.New("ニコニコへのログインが必要です")
 var watchSegment = regexp.MustCompile(`^(?:(?:sm|nm|so)?[0-9]{1,20})$`)
 
@@ -77,14 +80,14 @@ func routeFor(raw string) screenRoute {
 	r.link, r.key = link, parts[len(parts)-1]
 	switch kind {
 	case "タグ検索", "キーワード検索":
+		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
+		r.key, _ = url.PathUnescape(term)
 		page, ok := nativeSearchPage(input)
 		if !ok {
 			r.officialBrowse = true
 			return r
 		}
-		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
 		r.kind, r.page = screenSearch, page
-		r.key, _ = url.PathUnescape(term)
 	case "動画":
 		if watchSegment.MatchString(r.key) {
 			r.kind = screenVideo
@@ -227,6 +230,10 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	details                                           videoDetails
+	external                                          bool
+	sortMetrics                                       map[string]string
+	masked                                            bool
 }
 
 type catalogPage struct {
@@ -236,8 +243,11 @@ type catalogPage struct {
 	description            []descriptionPart
 	tags                   []string
 	publisher              videoPublisher
+	details                videoDetails
 	emptyNotice            string
 	more                   bool
+	total                  *int
+	rawCount               int
 }
 
 type catalog struct {
@@ -296,8 +306,8 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 			return nil, errSignIn
 		}
 		cookie, err := c.session(target.String())
-		if path == accountStatusPath && err != nil && !errors.Is(err, errSignIn) {
-			return nil, err
+		if err != nil && !errors.Is(err, errSignIn) {
+			return nil, errSessionUnavailable
 		}
 		if err != nil || cookie == nil || cookie.Name != "user_session" || !cookie.Secure ||
 			cookie.Value == "" || cookie.Valid() != nil {
@@ -311,8 +321,11 @@ func (c catalog) request(ctx context.Context, host, path string, q url.Values, p
 	}
 	defer res.Body.Close()
 	if res.StatusCode != 200 {
-		if private && (res.StatusCode == 401 || res.StatusCode == 403 && path != accountStatusPath) {
+		if private && res.StatusCode == 401 {
 			return nil, errSignIn
+		}
+		if private && res.StatusCode == 403 && path != accountStatusPath {
+			return nil, errAccessDenied
 		}
 		return nil, catalogHTTPStatus(res.StatusCode)
 	}
@@ -338,15 +351,7 @@ func decodeJSON[T any](b []byte) (T, error) {
 }
 
 func makeVideo(id, title string, duration, views, comments int) (card, bool) {
-	if !watchSegment.MatchString(id) {
-		return card{}, false
-	}
-	item := card{link: home + "watch/" + id, title: strings.TrimSpace(title)}
-	if item.title == "" {
-		item.title = id
-	}
-	item.summary = fmt.Sprintf("%d:%02d  ·  再生 %d  ·  コメント %d", duration/60, duration%60, views, comments)
-	return item, true
+	return makeOptionalVideo(id, title, &duration, &views, &comments)
 }
 
 func searchParameters(r screenRoute) url.Values {
@@ -361,7 +366,7 @@ func searchParameters(r screenRoute) url.Values {
 		direction = "+"
 	}
 	return url.Values{"q": {r.key}, "targets": {targets},
-		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId"},
+		"fields": {"contentId,title,lengthSeconds,viewCounter,commentCounter,thumbnailUrl,tags,userId,channelId,startTime,lastCommentTime,likeCounter,mylistCounter"},
 		"_sort":  {direction + sort.snapshotKey}, "_limit": {strconv.Itoa(searchPageSize)}, "_offset": {strconv.Itoa(r.page * searchPageSize)},
 		"_context": {"NiconicoDesktopMyGo"}}
 }
@@ -389,21 +394,29 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	}
 	type row struct {
 		ContentID, Title, ThumbnailURL             string
-		LengthSeconds, ViewCounter, CommentCounter int
+		StartTime, LastCommentTime                 string
+		LikeCounter, MylistCounter                 *int
+		LengthSeconds, ViewCounter, CommentCounter *int
 		Tags                                       json.RawMessage
 		UserID, ChannelID                          json.RawMessage
 	}
 	result, err := decodeJSON[struct {
-		Meta struct{ Status, TotalCount int }
+		Meta struct {
+			Status     int
+			TotalCount *int
+		}
 		Data []row
 	}](data)
 	if err != nil || result.Meta.Status != 200 || result.Data == nil {
 		return p, errors.New("検索結果を取得できませんでした")
 	}
-	p.more = (r.page+1)*searchPageSize < min(result.Meta.TotalCount, snapshotResultLimit)
+	p.total, p.rawCount = result.Meta.TotalCount, len(result.Data)
+	p.more = r.page < p.lastSearchPage() && (p.total != nil || p.rawCount == searchPageSize)
 	for _, item := range result.Data {
-		if v, ok := makeVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
+		if v, ok := makeOptionalVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
+			v.details.posted = videoPostedDate(item.StartTime)
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
+			v.sortMetrics = searchMetrics(item.StartTime, item.LastCommentTime, item.LikeCounter, item.MylistCounter)
 			v.tags = searchVideoTags(item.Tags)
 			v.owner = (publisherMetadata{ID: item.ChannelID}).publisher("channel").videos
 			if v.owner == "" {
@@ -418,13 +431,17 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 }
 
 type apiVideo struct {
-	ID, Title               string
-	Duration                int
-	Count                   struct{ View, Comment int }
-	Owner                   publisherMetadata
-	Tag, Tags               json.RawMessage
-	Thumbnail               struct{ URL, MiddleURL, ListingURL string }
-	RequireSensitiveMasking bool
+	ID, Title string
+	Duration  *int
+	Count     struct {
+		View, Comment *int
+		Like, Mylist  *int
+	}
+	RegisteredAt, LastCommentTime string
+	Owner                         publisherMetadata
+	Tag, Tags                     json.RawMessage
+	Thumbnail                     struct{ URL, MiddleURL, ListingURL string }
+	RequireSensitiveMasking       bool
 }
 
 func (v apiVideo) thumbnailURL() string {
@@ -439,8 +456,11 @@ func (v apiVideo) thumbnailURL() string {
 }
 
 func (v apiVideo) card() (card, bool) {
-	x, ok := makeVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
+	x, ok := makeOptionalVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
+	x.details.posted = videoPostedDate(v.RegisteredAt)
 	x.thumbnail = v.thumbnailURL()
+	x.sortMetrics = searchMetrics(v.RegisteredAt, v.LastCommentTime, v.Count.Like, v.Count.Mylist)
+	x.masked = v.RequireSensitiveMasking
 	p := v.Owner.publisher(v.Owner.OwnerType)
 	x.owner, x.ownerName, x.tags = p.videos, p.name, searchVideoTags(v.Tags)
 	if len(x.tags) == 0 {
@@ -466,6 +486,19 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		path, title = "/v2/mylists/"+r.key, "マイリスト"
 	}
 	p := catalogPage{title: title}
+	switch r.kind {
+	case screenUser:
+		p.emptyNotice = "公開されている投稿動画はありません。"
+	case screenUserLists:
+		p.emptyNotice = "公開されているマイリストはありません。"
+	case screenOwnLists:
+		p.emptyNotice = "自分のマイリストはありません。公式ページから作成できます。"
+	default:
+		p.emptyNotice = "このマイリストに表示できる動画はありません。"
+	}
+	if r.page > 0 {
+		p.emptyNotice = "このページに表示できる項目はありません。前のページに戻ってください。"
+	}
 	limit := pageSize
 	switch r.kind {
 	case screenUser:
@@ -520,6 +553,14 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 			}
 		}
 	}](data)
+	if err == nil && private {
+		if result.Meta.Status == 401 {
+			return p, errSignIn
+		}
+		if result.Meta.Status == 403 {
+			return p, errAccessDenied
+		}
+	}
 	if err != nil || result.Meta.Status != 200 {
 		return p, errors.New("一覧を取得できませんでした")
 	}
@@ -542,11 +583,14 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 				label = "非公開"
 			}
 			item := card{link: link, title: list.Name, summary: fmt.Sprintf("%s  ·  %d 件", label, list.ItemsCount)}
+			maskedSample := false
 			for _, sample := range list.SampleItems {
+				maskedSample = maskedSample || sample.Video.RequireSensitiveMasking
 				if item.thumbnail = sample.Video.thumbnailURL(); item.thumbnail != "" {
 					break
 				}
 			}
+			item.masked = item.thumbnail == "" && maskedSample
 			p.items = append(p.items, item)
 		}
 		return p, nil
@@ -574,6 +618,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		if x, ok := v.card(); ok {
 			if r.kind == screenUser && p.title == title && x.ownerName != "" {
 				p.title = x.ownerName + " の投稿動画"
+				p.publisher = v.Owner.publisher("user")
 			}
 			p.items = append(p.items, x)
 		} else {
@@ -599,14 +644,18 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 	var result struct {
 		Status string `xml:"status,attr"`
 		Thumb  struct {
-			ID           string `xml:"video_id"`
-			Title        string `xml:"title"`
-			Description  string `xml:"description"`
-			UserID       string `xml:"user_id"`
-			UserNickname string `xml:"user_nickname"`
-			ChannelID    string `xml:"ch_id"`
-			ChannelName  string `xml:"ch_name"`
-			Tags         []struct {
+			ID            string `xml:"video_id"`
+			Title         string `xml:"title"`
+			Length        string `xml:"length"`
+			FirstRetrieve string `xml:"first_retrieve"`
+			ViewCounter   string `xml:"view_counter"`
+			CommentNum    string `xml:"comment_num"`
+			Description   string `xml:"description"`
+			UserID        string `xml:"user_id"`
+			UserNickname  string `xml:"user_nickname"`
+			ChannelID     string `xml:"ch_id"`
+			ChannelName   string `xml:"ch_name"`
+			Tags          []struct {
 				Domain string   `xml:"domain,attr"`
 				Items  []string `xml:"tag"`
 			} `xml:"tags"`
@@ -619,6 +668,7 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 		return p, errors.New("指定した動画と異なる動画情報を受け取りました")
 	}
 	p.title = result.Thumb.Title
+	p.details = videoDetails{duration: videoLength(result.Thumb.Length), posted: videoPostedDate(result.Thumb.FirstRetrieve), views: videoCount(result.Thumb.ViewCounter), comments: videoCount(result.Thumb.CommentNum)}
 	for _, group := range result.Thumb.Tags {
 		if group.Domain == "jp" || group.Domain == "" {
 			for _, name := range group.Items {
@@ -658,4 +708,33 @@ func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {
 
 func unavailableVideo() card {
 	return card{title: "現在表示できない動画", summary: "動画を特定できないため開けません。"}
+}
+
+func makeOptionalVideo(id, title string, duration, views, comments *int) (card, bool) {
+	if !watchSegment.MatchString(id) {
+		return card{}, false
+	}
+	item := card{link: home + "watch/" + id, title: strings.TrimSpace(title)}
+	if item.title == "" {
+		item.title = id
+	}
+	count := func(value *int) string {
+		if value == nil || *value < 0 {
+			return ""
+		}
+		return strconv.Itoa(*value)
+	}
+	length := ""
+	if duration != nil && *duration >= 0 {
+		length = fmt.Sprintf("%d:%02d", *duration/60, *duration%60)
+	}
+	item.details = videoDetails{duration: length, views: count(views), comments: count(comments)}
+	shown := func(value string) string {
+		if value == "" {
+			return "—"
+		}
+		return value
+	}
+	item.summary = shown(length) + "  ·  再生 " + shown(item.details.views) + "  ·  コメント " + shown(item.details.comments)
+	return item, true
 }

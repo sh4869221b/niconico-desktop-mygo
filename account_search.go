@@ -39,7 +39,7 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute, private bool)
 	result, err := decodeJSON[struct {
 		Meta struct{ Status int }
 		Data struct {
-			TotalCount int
+			TotalCount *int
 			HasNext    *bool
 			Items      []apiVideo
 		}
@@ -47,7 +47,10 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute, private bool)
 	if err != nil {
 		return p, err
 	}
-	if private && (result.Meta.Status == 401 || result.Meta.Status == 403) {
+	if private && result.Meta.Status == 403 {
+		return p, errAccessDenied
+	}
+	if private && result.Meta.Status == 401 {
 		return p, errSignIn
 	}
 	if result.Meta.Status != 200 || result.Data.Items == nil {
@@ -57,7 +60,11 @@ func (c catalog) accountSearch(ctx context.Context, r screenRoute, private bool)
 	if private {
 		p.searchMode = "ログイン検索"
 	}
-	p.more = hasMore(result.Data.HasNext, r.page, result.Data.TotalCount, searchPageSize)
+	p.total, p.rawCount = result.Data.TotalCount, len(result.Data.Items)
+	p.more = r.page < p.lastSearchPage() && (p.total != nil || p.rawCount == searchPageSize)
+	if result.Data.HasNext != nil {
+		p.more = *result.Data.HasNext && r.page < p.lastSearchPage()
+	}
 	for _, v := range result.Data.Items {
 		if item, ok := v.card(); ok {
 			p.items = append(p.items, item)

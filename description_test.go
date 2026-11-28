@@ -29,7 +29,7 @@ func TestDescriptionRecognizesOnlySupportedReferences(t *testing.T) {
 	}
 	actual = actual[:0]
 	for _, part := range parts {
-		if part.link.link != "" {
+		if part.link.link != "" && !part.link.external {
 			actual = append(actual, part.link.link)
 		}
 	}
