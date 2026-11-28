@@ -464,6 +464,19 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		path, title = "/v2/mylists/"+r.key, "マイリスト"
 	}
 	p := catalogPage{title: title}
+	switch r.kind {
+	case screenUser:
+		p.emptyNotice = "公開されている投稿動画はありません。"
+	case screenUserLists:
+		p.emptyNotice = "公開されているマイリストはありません。"
+	case screenOwnLists:
+		p.emptyNotice = "自分のマイリストはありません。公式ページから作成できます。"
+	default:
+		p.emptyNotice = "このマイリストに表示できる動画はありません。"
+	}
+	if r.page > 0 {
+		p.emptyNotice = "このページに表示できる項目はありません。前のページに戻ってください。"
+	}
 	limit := pageSize
 	switch r.kind {
 	case screenUser:
@@ -572,6 +585,7 @@ func (c catalog) list(ctx context.Context, r screenRoute) (catalogPage, error) {
 		if x, ok := v.card(); ok {
 			if r.kind == screenUser && p.title == title && x.ownerName != "" {
 				p.title = x.ownerName + " の投稿動画"
+				p.publisher = v.Owner.publisher("user")
 			}
 			p.items = append(p.items, x)
 		}

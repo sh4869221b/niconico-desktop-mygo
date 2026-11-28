@@ -41,6 +41,7 @@ type browser struct {
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
 	index                        int
+	userNames                    map[string]string
 	result                       catalogPage
 	resultErr                    error
 	busy                         bool
