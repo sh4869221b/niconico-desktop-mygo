@@ -42,6 +42,7 @@ func (b *browser) navigate(link string) {
 	if allowedURL(link) == nil {
 		return
 	}
+	b.libraryExpanded = false
 	if link == login {
 		b.loginHelp = true
 		return
@@ -59,6 +60,7 @@ func (b *browser) navigate(link string) {
 }
 
 func (b *browser) openNative(r screenRoute, add bool) {
+	b.libraryExpanded = false
 	b.loginHelp = false
 	b.showSearchRoute(r)
 	if b.official {
@@ -85,6 +87,7 @@ func (b *browser) openNative(r screenRoute, add bool) {
 func (b *browser) moveNative(delta int) {
 	next := b.index + delta
 	if next >= 0 && next < len(b.navigation) {
+		b.libraryExpanded = false
 		b.index = next
 		b.showSearchRoute(b.navigation[next])
 		visit := b.nativeVisit()
@@ -187,6 +190,7 @@ func (b *browser) playOfficialLink(view *mygo.WebView, raw string, alreadyNaviga
 }
 
 func (b *browser) openOfficial(target string) {
+	b.libraryExpanded = false
 	b.loginHelp = false
 	if allowedURL(target) == nil || b.closed {
 		return
@@ -225,6 +229,7 @@ func (b *browser) closeOfficial() {
 }
 
 func (b *browser) leaveOfficial() {
+	b.libraryExpanded = false
 	b.closeOfficial()
 	if b.index >= 0 {
 		b.showSearchRoute(b.navigation[b.index])
