@@ -1,8 +1,9 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
 	"math"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func ordinaryShareURL(raw string) (string, string) {
@@ -15,8 +16,8 @@ func ordinaryShareURL(raw string) (string, string) {
 			return raw, "現在の検索条件をコピー"
 		}
 	}
-	if allowedURL(raw) != nil {
-		return raw, "ページURLをコピー"
+	if route := routeFor(raw); route.kind == screenList || route.kind == screenUser || route.kind == screenUserSeries || route.kind == screenSeries {
+		return canonicalURL, "ページURLをコピー"
 	}
 	return "", "ページURLをコピー"
 }
@@ -34,10 +35,14 @@ func copyURL(c *ui.Context, target string, notice func(string)) {
 	})
 }
 
-func playerShareURLs(p *playerWindow) (string, string) {
+func playerShareURLs(p *playerWindow, live playbackPage) (string, string) {
 	raw := p.target
-	if p.native == nil && routeFor(p.document.video).kind == screenVideo {
-		raw = p.document.video
+	webWatch := screenRoute{}
+	if p.native == nil && live != nil && p.document.loaded && !p.document.loading && p.failedWebTarget == "" && !p.replaceFailedWebView && !live.IsLoading() {
+		webWatch = routeFor(live.URL())
+		if webWatch.kind == screenVideo {
+			raw = webWatch.link
+		}
 	}
 	base, _ := canonical(raw)
 	if routeFor(base).kind != screenVideo {
@@ -49,7 +54,8 @@ func playerShareURLs(p *playerWindow) (string, string) {
 			seconds = n.stream.Position().Seconds()
 			verified = true
 		}
-	} else if p.restoring == nil && p.playedPosition != nil && p.playedVideo != "" && p.document.video == p.playedWatch.link && base == p.playedWatch.link {
+	} else if webWatch.kind == screenVideo && !p.returningToVideo && p.restoring == nil && p.playedPosition != nil && p.playedVideo != "" &&
+		p.document.video == webWatch.link && p.playedWatch.link == webWatch.link {
 		seconds = p.playedPosition.seconds
 		verified = true
 	}
@@ -58,8 +64,8 @@ func playerShareURLs(p *playerWindow) (string, string) {
 	}
 	return base, playbackRestoreURL(base, seconds)
 }
-func (b *browser) drawPlayerSharing(p *playerWindow, c *ui.Context) {
-	base, timed := playerShareURLs(p)
+func (p *playerWindow) drawSharing(c *ui.Context, live playbackPage) {
+	base, timed := playerShareURLs(p, live)
 	ui.Row(c).Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
 		notice := func(s string) { p.shareNotice = s }
 		if ui.Button(c, "動画URLをコピー").Disabled(base == "").Clicked() {
