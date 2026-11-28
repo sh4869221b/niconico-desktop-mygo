@@ -161,8 +161,8 @@ func (n *nativePlayer) failStream(message string) {
 	if n.stream != nil {
 		n.retryPaused = n.stream.Paused()
 		n.pauseRequested = n.retryPaused
-		if n.stream.Ready() && !n.stream.Preparing() && n.stream.Err() == nil {
-			n.retryAt, n.handoffKnown = n.stream.Position(), true
+		if at, ok := n.stream.ConfirmedPosition(); ok {
+			n.retryAt, n.handoffKnown = at, true
 		}
 	}
 	if n.relay != nil {
@@ -341,9 +341,11 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				b.recordVideo(p, p.target, p.title)
 			}
 		}
-		current := s.Position()
-		if s.Ready() && !s.Preparing() {
+		current, confirmed := s.ConfirmedPosition()
+		if confirmed {
 			n.retryAt, n.handoffKnown = current, true
+		} else {
+			current = s.Position()
 		}
 		compact := w < 780
 		var body ui.Element
@@ -407,6 +409,9 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			ui.Text(c, b.nativeAudioNotice).Role(ui.RoleStatus).Wrap()
 		}
 	})
+	// Drawing the video first synchronizes the engine's latest state. The
+	// final frame can then record completion even if no next frame is scheduled.
+	b.recordPlaybackProgress(p, c.Now(), false)
 	if !c.FocusTakesText() && !n.commentList.FocusWithin(c) {
 		if playerToggleShortcut(c, ui.KeySpace) {
 			if n.stream != nil {

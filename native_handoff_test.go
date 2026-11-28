@@ -31,6 +31,9 @@ func TestNativeHandoffCapturesPositionAndPause(t *testing.T) {
 	if p.nativeWebRestore(routeFor(home+"watch/sm12"), time.Now()) != nil {
 		t.Fatal("restored a different video")
 	}
+	if p.nativeWebRestore(routeFor(home+"watch/sm9?from=20"), time.Now()) != nil {
+		t.Fatal("a new explicit start was overridden by the handoff")
+	}
 	p.native.videoID = "sm12"
 	if p.nativeWebRestore(routeFor(p.target), time.Now()) != nil {
 		t.Fatal("accepted mismatching stream identity")

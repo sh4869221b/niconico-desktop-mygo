@@ -664,6 +664,20 @@ func (e *mfEngine) Position() time.Duration {
 	return time.Duration(d * float64(time.Second))
 }
 
+func (e *mfEngine) ConfirmedPosition() (time.Duration, bool) {
+	e.mu.Lock()
+	pending := e.closed || e.state == media.Failed || !e.seekSince.IsZero()
+	e.mu.Unlock()
+	if pending || e.start != nil || call(e.engine, engineIsSeeking) != 0 {
+		return 0, false
+	}
+	seconds := callGetDouble(e.engine, engineGetCurrentTime)
+	if !(seconds >= 0 && seconds < float64(math.MaxInt64)/float64(time.Second)) {
+		return 0, false
+	}
+	return time.Duration(seconds * float64(time.Second)), true
+}
+
 func (e *mfEngine) Play() {
 	e.mu.Lock()
 	if e.state == media.Ended {

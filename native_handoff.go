@@ -22,8 +22,8 @@ func (p *playerWindow) nativeWebRestore(requested screenRoute, now time.Time) *w
 	}
 	if s := n.stream; s != nil {
 		position.paused = s.Paused()
-		if s.Ready() && !s.Preparing() && s.Err() == nil {
-			position.seconds = s.Position().Seconds()
+		if at, ok := s.ConfirmedPosition(); ok {
+			position.seconds = at.Seconds()
 		}
 	}
 	target := playbackRestoreURL(requested.target, position.seconds)

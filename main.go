@@ -405,10 +405,18 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 	if p == nil || b.player != p || !ok || e.Kind != "動画" {
 		return
 	}
+	if p.historyTarget != "" {
+		if saved, ok := makeEntry(p.historyTarget, title); ok && saved.URL == e.URL {
+			e = saved
+		} else {
+			p.historyTarget = ""
+		}
+	}
 	suppressHistory := p.historySuppressed[e.URL]
 	newVisit := p.historyVisitURL != e.URL
 	visitedAt := time.Now().UTC()
 	recording := false
+	var recordedAt time.Time
 	b.changeLibrary(func(data *library) bool {
 		pinUpdated := data.fillPinTitle(e)
 		recording = !suppressHistory && b.canRecordHistory()
@@ -419,6 +427,7 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 		next.LastViewedAt = visitedAt
 		if i := slices.IndexFunc(data.History, func(x entry) bool { return x.URL == e.URL }); i >= 0 {
 			previous := data.History[i]
+			next = copyHistoryProgress(next, previous)
 			if next.Title == next.URL {
 				next.Title = previous.Title
 			}
@@ -426,6 +435,7 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 				next.LastViewedAt = previous.LastViewedAt
 			}
 		}
+		recordedAt = next.LastViewedAt
 		if len(data.History) > 0 && data.History[0] == next {
 			return pinUpdated
 		}
@@ -433,6 +443,9 @@ func (b *browser) recordVideo(p *playerWindow, raw, title string) {
 		return true
 	})
 	if recording {
+		if newVisit || p.historyVisitAt.IsZero() {
+			p.historyVisitAt, p.lastHistoryWrite = recordedAt, time.Time{}
+		}
 		p.historyVisitURL = e.URL
 	}
 	if b.win != nil {
@@ -767,6 +780,9 @@ func (b *browser) sidebar(c *ui.Context) {
 					})
 					if b.libraryExpanded {
 						ui.Text(row, item.openURL()).TextColor(c.Theme().TextMuted).Wrap()
+					}
+					if b.history {
+						b.drawHistoryResume(row, item)
 					}
 				}
 			})
