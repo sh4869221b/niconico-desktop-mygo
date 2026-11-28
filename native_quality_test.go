@@ -75,12 +75,18 @@ func TestQualityChangeCapturesIndependentPlaybackState(t *testing.T) {
 	s.Pause()
 	s.SetVolume(0.31)
 	s.SetMuted(true)
-	n := &nativePlayer{stream: s}
-	state := captureNativeQuality(n, routeFor(home+"watch/sm9?from=3"))
+	n := &nativePlayer{stream: s, showComments: false, hideCommentPanel: true, showOverview: true}
+	b := &browser{nativeVolume: defaultNativeVolume}
+	state := b.captureNativeQuality(n, routeFor(home+"watch/sm9?from=3"))
 	if state.at != 55500*time.Millisecond || !state.paused || !state.muted || state.volume != 0.31 {
 		t.Fatalf("lost quality-change state: %+v", state)
 	}
 	if s.Position() != state.at || s.Playing() {
 		t.Fatal("capture disturbed original playback")
+	}
+	replacement := &nativePlayer{showComments: true, displayPending: true}
+	state.apply(replacement)
+	if !replacement.pauseRequested || replacement.showComments || !replacement.hideCommentPanel || !replacement.showOverview || replacement.displayPending {
+		t.Fatal("quality change reset the active comment display")
 	}
 }

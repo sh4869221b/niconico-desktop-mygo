@@ -59,16 +59,28 @@ func qualityOutputs(videos, audios []mediaTrack, quality streamQuality) [][2]str
 }
 
 type nativeQualityState struct {
-	at            time.Duration
-	paused, muted bool
-	volume        float64
+	at                             time.Duration
+	paused, muted                  bool
+	volume                         float64
+	showComments, hideCommentPanel bool
+	showOverview, showKeys         bool
 }
 
-func captureNativeQuality(n *nativePlayer, route screenRoute) *nativeQualityState {
-	state := &nativeQualityState{at: route.startTime(), paused: n.pauseRequested, volume: defaultNativeVolume / 100.0}
+func (s *nativeQualityState) apply(n *nativePlayer) {
+	n.startAt, n.pauseRequested = s.at, s.paused
+	n.showComments, n.hideCommentPanel = s.showComments, s.hideCommentPanel
+	n.showOverview, n.showKeys = s.showOverview, s.showKeys
+	n.displayPending = false
+}
+
+func (b *browser) captureNativeQuality(n *nativePlayer, route screenRoute) *nativeQualityState {
+	state := &nativeQualityState{at: route.startTime(), muted: b.nativeMuted, volume: b.nativeVolume / 100.0}
 	if n.qualityRestore != nil {
 		*state = *n.qualityRestore
 	}
+	state.paused = n.pauseRequested
+	state.showComments, state.hideCommentPanel = n.showComments, n.hideCommentPanel
+	state.showOverview, state.showKeys = n.showOverview, n.showKeys
 	if s := n.stream; s != nil {
 		state.paused, state.muted, state.volume = !s.Playing(), s.Muted(), s.Volume()
 		if s.Ready() && !s.Preparing() {
@@ -83,7 +95,7 @@ func (b *browser) drawNativeQuality(c *ui.Context, p *playerWindow, n *nativePla
 	current := names[n.quality]
 	if ui.Select(c, &current, names).Label("配信画質").Tooltip("自動は利用可能な画質からHLSプレーヤーが選択します").Width(156).Disabled(n.loadingStream).Changed() {
 		quality := streamQuality(slices.Index(names, current))
-		state := captureNativeQuality(n, routeFor(p.target))
+		state := b.captureNativeQuality(n, routeFor(p.target))
 		go mygo.RunOnMain(func() {
 			if !b.closed && b.player == p && p.native == n {
 				b.loadNativePlayerQuality(p, routeFor(p.target), quality, state)

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -99,29 +98,33 @@ func (ng *commentNG) change(a commentAuthor, block bool) error {
 	if ng.path == "" || !a.valid() {
 		return errors.New("invalid comment NG change")
 	}
-	if ng.blocked[a] == block {
-		return nil
-	}
-	blocked := maps.Clone(ng.blocked)
-	if blocked == nil {
-		blocked = make(map[commentAuthor]bool)
-	}
-	if block {
-		if len(blocked) >= maxCommentNGEntries {
-			return errors.New("comment NG limit reached")
+	return withSettingsLock(ng.path, func() error {
+		latest, err := loadCommentNG(ng.path)
+		if err != nil {
+			return err
 		}
-		blocked[a] = true
-	} else {
-		delete(blocked, a)
-	}
-	entries := sortedCommentAuthors(blocked)
-	data, err := json.Marshal(entries)
-	if err == nil {
-		err = writeSettings(ng.path, data)
-	}
-	if err != nil {
-		return err
-	}
-	ng.blocked, ng.entries = blocked, entries
-	return nil
+		if latest.blocked[a] != block {
+			if block {
+				if len(latest.blocked) >= maxCommentNGEntries {
+					return errors.New("comment NG limit reached")
+				}
+				if latest.blocked == nil {
+					latest.blocked = make(map[commentAuthor]bool)
+				}
+				latest.blocked[a] = true
+			} else {
+				delete(latest.blocked, a)
+			}
+			latest.entries = sortedCommentAuthors(latest.blocked)
+			data, err := json.Marshal(latest.entries)
+			if err != nil {
+				return err
+			}
+			if err := writeSettings(ng.path, data); err != nil {
+				return err
+			}
+		}
+		*ng = latest
+		return nil
+	})
 }
