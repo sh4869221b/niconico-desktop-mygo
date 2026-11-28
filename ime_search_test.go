@@ -8,6 +8,8 @@ import (
 
 // Tester models the platform's IME filter. This protects the app's toolbar
 // integration, but does not replace Microsoft IME/IMM32 testing on Windows.
+const imeSearchInputLabel = "キーワード、タグ、動画IDまたはURL"
+
 func TestSearchWaitsForIMECommitAndNextEnter(t *testing.T) {
 	for _, commitBeforeEnd := range []bool{false, true} {
 		name := "composition-end-before-commit"
@@ -15,11 +17,11 @@ func TestSearchWaitsForIMECommitAndNextEnter(t *testing.T) {
 			name = "commit-before-composition-end"
 		}
 		t.Run(name, func(t *testing.T) {
-			start := routeFor(home + "tag/previous")
+			start := routeFor(home)
 			b := &browser{navigation: []screenRoute{start}, closed: true, searchDefault: searchSortPreference{Sort: "v", Ascending: true}}
 			view := ui.NewTester(b.toolbar, 1260, 160)
 			view.Key(ui.Ctrl, ui.KeyL)
-			if !view.Focused("キーワード、タグ、動画IDまたはURL") {
+			if !view.Focused(imeSearchInputLabel) {
 				t.Fatal("Ctrl+L did not focus the actual search input")
 			}
 			view.Compose("はつねみく", 5)
@@ -35,8 +37,9 @@ func TestSearchWaitsForIMECommitAndNextEnter(t *testing.T) {
 				view.Type("初音ミク")
 			}
 			view.Frame()
-			if b.field != "初音ミク" || len(b.navigation) != 1 || b.epoch != 0 {
-				t.Fatalf("commit navigated or lost text: %q, %d routes", b.field, len(b.navigation))
+			input, ok := view.Access(imeSearchInputLabel)
+			if !ok || input.Value != "初音ミク" || len(b.navigation) != 1 || b.epoch != 0 {
+				t.Fatalf("commit navigated or lost text: %q, %d routes", input.Value, len(b.navigation))
 			}
 			view.Key(0, ui.KeyEnter)
 			want := b.searchDefault.apply(routeFor(resolve("初音ミク", false)))
@@ -68,7 +71,8 @@ func TestCancelledIMECompositionDoesNotSearch(t *testing.T) {
 	view.Key(0, ui.KeyEscape)
 	view.Compose("", 0)
 	view.Frame()
-	if b.field != "" || len(b.navigation) != 0 || b.epoch != 0 {
+	input, ok := view.Access(imeSearchInputLabel)
+	if !ok || input.Value != "" || len(b.navigation) != 0 || b.epoch != 0 {
 		t.Fatal("cancelled composition changed text or navigated")
 	}
 }
