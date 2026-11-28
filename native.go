@@ -485,6 +485,13 @@ func (b *browser) drawCatalogIntro(scope *ui.Context, p catalogPage) {
 
 func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card, visit *catalogVisit) {
 	t := scope.Theme()
+	if item.link == "" {
+		ui.Column(scope).FillWidth().Gap(4).Padding(6, 8).Background(t.Surface).Children(func() {
+			ui.Text(scope, item.title).Wrap()
+			ui.Text(scope, item.summary).TextColor(t.TextMuted).Wrap()
+		})
+		return
+	}
 	ui.Row(scope).FillWidth().AlignItems(ui.Center).Gap(10).Padding(6, 8).Radius(6).Background(t.Surface).Children(func() {
 		b.drawThumbnail(scope.Key(item.link), item)
 		ui.Column(scope).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Start).Children(func() {
