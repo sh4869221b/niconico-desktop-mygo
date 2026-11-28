@@ -77,6 +77,7 @@ type browser struct {
 	showPlaybackSettings         bool
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
+	settingsNG                   nativePlayer
 	nativeVolume                 float64
 	statusAnnouncements          []string
 	announcedResult              string
