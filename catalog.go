@@ -77,14 +77,14 @@ func routeFor(raw string) screenRoute {
 	r.link, r.key = link, parts[len(parts)-1]
 	switch kind {
 	case "タグ検索", "キーワード検索":
+		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
+		r.key, _ = url.PathUnescape(term)
 		page, ok := nativeSearchPage(input)
 		if !ok {
 			r.officialBrowse = true
 			return r
 		}
-		_, term, _ := strings.Cut(strings.TrimLeft(u.EscapedPath(), "/"), "/")
 		r.kind, r.page = screenSearch, page
-		r.key, _ = url.PathUnescape(term)
 	case "動画":
 		if watchSegment.MatchString(r.key) {
 			r.kind = screenVideo

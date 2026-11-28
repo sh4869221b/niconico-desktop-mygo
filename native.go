@@ -50,6 +50,7 @@ func (b *browser) navigate(link string) {
 }
 
 func (b *browser) openNative(r screenRoute, add bool) {
+	b.showSearchRoute(r)
 	if b.official {
 		b.closeOfficial()
 	}
@@ -68,6 +69,7 @@ func (b *browser) moveNative(delta int) {
 	next := b.index + delta
 	if next >= 0 && next < len(b.navigation) {
 		b.index = next
+		b.showSearchRoute(b.navigation[next])
 		b.refreshNative()
 	}
 }
@@ -159,6 +161,7 @@ func (b *browser) openOfficial(target string) {
 		return
 	}
 	b.cancelLoad()
+	b.showSearchRoute(routeFor(target))
 	b.official, b.officialTarget = true, target
 	b.loading()
 	b.win.Invalidate()
@@ -187,6 +190,9 @@ func (b *browser) closeOfficial() {
 
 func (b *browser) leaveOfficial() {
 	b.closeOfficial()
+	if b.index >= 0 {
+		b.showSearchRoute(b.navigation[b.index])
+	}
 	b.refreshNative()
 }
 
