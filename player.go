@@ -24,6 +24,7 @@ type playerWindow struct {
 	failedWebTarget        string
 	replaceFailedWebView   bool
 	historySuppressed      map[string]bool
+	shareNotice            string
 	webVideo               string // the video currently allowed in this WebView
 	returningToVideo       bool
 	playedWatch            screenRoute
@@ -612,6 +613,11 @@ func (p *playerWindow) draw(c *ui.Context, recover func(playbackMode)) {
 				}
 			})
 		}
+		var page playbackPage
+		if p.view != nil {
+			page = p.view.Page()
+		}
+		p.drawSharing(c, page)
 		if p.commentLanguageWarning {
 			ui.Text(c, commentLanguageWarning).TextColor(c.Theme().TextMuted).Padding(5, 12).Wrap()
 		}

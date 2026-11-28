@@ -433,10 +433,12 @@ func (b *browser) pinCurrent() {
 		b.status = b.storeWarning
 		return
 	}
-	var added, renamed bool
+	var added, renamed, duplicate bool
 	_, saved := b.changeLibrary(func(data *library) bool {
-		added, renamed = false, data.fillPinTitle(e)
-		if renamed || slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL }) {
+		added, renamed = false, false
+		duplicate = slices.ContainsFunc(data.Pins, func(item entry) bool { return item.URL == e.URL })
+		if duplicate {
+			renamed = data.fillPinTitle(e)
 			return renamed
 		}
 		if len(data.Pins) >= 500 {
@@ -447,16 +449,19 @@ func (b *browser) pinCurrent() {
 		return true
 	})
 	if added {
-		b.history, b.showLibrary = false, true
+		b.showLibrary = true
 	}
 	if saved {
 		switch {
-		case added:
-			b.status = e.Kind + "を登録しました。"
 		case renamed:
 			b.status = "登録済みの仮の名前を更新しました。"
+		case duplicate:
+			b.status = "登録済みです。"
+		case added:
+			b.status = e.Kind + "を登録しました。"
 		default:
-			b.status = "登録済み、または登録件数が上限に達しています。"
+			b.status = "登録は500件までです。登録済みタブから不要な項目を削除してください。"
+			b.history, b.showLibrary = false, true
 		}
 	}
 }
@@ -596,12 +601,20 @@ func (b *browser) toolbar(c *ui.Context) {
 			if ui.Button(c, "マイリスト").Clicked() {
 				b.navigate(mylists)
 			}
-			saved, _ := canonical(b.current())
-			if ui.Button(c, "☆ 登録").Tooltip("表示中のページを登録").Disabled(saved == "").Clicked() {
+			pin, canPin := makeEntry(b.current(), "")
+			pinLabel := "☆ 登録"
+			if canPin && slices.ContainsFunc(b.data.Pins, func(item entry) bool { return item.URL == pin.URL }) {
+				pinLabel = "★ 登録済み"
+			}
+			if ui.Button(c, pinLabel).Tooltip("表示中のページを登録").Disabled(!canPin).Clicked() {
 				b.pinCurrent()
 			}
-			if ui.Button(c, "URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
+			if ui.Button(c, "go-nico-list用URLをコピー").Tooltip("go-nico-list用のURLをコピー").Disabled(goNicoListURL(b.current()) == "").Clicked() {
 				b.copyCurrent()
+			}
+			target, label := ordinaryShareURL(b.current())
+			if ui.Button(c, label).Disabled(target == "").Clicked() {
+				copyURL(c, target, func(message string) { b.status = message })
 			}
 			if notice := mylistCopyCondition(b.current()); notice != "" {
 				ui.Text(c, notice).Wrap().TextColor(t.TextMuted)
