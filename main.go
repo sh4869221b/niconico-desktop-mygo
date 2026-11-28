@@ -47,6 +47,7 @@ type browser struct {
 	catalog                      catalog
 	thumbnails                   *thumbnails
 	navigation                   []screenRoute
+	nativeVisits                 []*catalogVisit
 	index                        int
 	userNames                    map[string]string
 	result                       catalogPage
