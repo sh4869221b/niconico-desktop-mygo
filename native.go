@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ func (b *browser) navigate(link string) {
 }
 
 func (b *browser) openNative(r screenRoute, add bool) {
+	b.showSearchRoute(r)
 	if b.official {
 		b.closeOfficial()
 	}
@@ -68,6 +70,7 @@ func (b *browser) moveNative(delta int) {
 	next := b.index + delta
 	if next >= 0 && next < len(b.navigation) {
 		b.index = next
+		b.showSearchRoute(b.navigation[next])
 		b.refreshNative()
 	}
 }
@@ -113,6 +116,7 @@ func (b *browser) refreshNative() {
 			if b.closed || b.official || b.epoch != epoch {
 				return
 			}
+			b.applyCatalogContext(r, &p)
 			b.result, b.resultErr, b.busy = p, err, false
 			b.status = p.searchMode
 			b.win.Invalidate()
@@ -159,6 +163,7 @@ func (b *browser) openOfficial(target string) {
 		return
 	}
 	b.cancelLoad()
+	b.showSearchRoute(routeFor(target))
 	b.official, b.officialTarget = true, target
 	b.loading()
 	b.win.Invalidate()
@@ -187,6 +192,9 @@ func (b *browser) closeOfficial() {
 
 func (b *browser) leaveOfficial() {
 	b.closeOfficial()
+	if b.index >= 0 {
+		b.showSearchRoute(b.navigation[b.index])
+	}
 	b.refreshNative()
 }
 
@@ -272,6 +280,17 @@ func (b *browser) drawNative(c *ui.Context) {
 					b.pageNative(-1)
 				}
 				ui.Text(scope, fmt.Sprintf("%d ページ", r.page+1))
+				if r.kind == screenSearch {
+					pageControls := ui.Row(scope.Key(r.page)).Gap(4)
+					value := ui.Local(pageControls, "page number", func() string { return strconv.Itoa(r.page + 1) })
+					pageControls.Children(func() {
+						input := ui.TextInput(scope, value).Label("移動先ページ").Width(72)
+						page, valid := p.searchPageNumber(*value)
+						if ui.Button(scope, "指定ページへ").Disabled(b.busy || !valid).Clicked() || input.Submitted() && !b.busy && valid {
+							b.openNative(r.withPage(page), true)
+						}
+					})
+				}
 				if ui.Button(scope, "次へ").Disabled(b.busy || !p.more || r.page == maxCatalogPage).Clicked() {
 					b.pageNative(1)
 				}
@@ -279,6 +298,9 @@ func (b *browser) drawNative(c *ui.Context) {
 		}
 		if b.epoch != epoch {
 			return
+		}
+		if r.kind == screenSearch && !b.busy && b.resultErr == nil {
+			ui.Text(scope, p.searchRange(r)).TextColor(t.TextMuted).Wrap()
 		}
 		if b.busy {
 			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
@@ -399,6 +421,11 @@ func (b *browser) drawCatalogItem(scope *ui.Context, kind screenKind, item card)
 			if item.summary != "" {
 				ui.Text(scope, strings.TrimSpace(item.summary)).TextColor(t.TextMuted).FontSize(12).Wrap().MaxLines(2)
 			}
+			if b.thumbnails != nil && !item.masked && b.thumbnails.failed(item.thumbnail) {
+				if ui.Button(scope, "画像を再試行").Clicked() {
+					b.thumbnails.retry(item.thumbnail)
+				}
+			}
 			if kind == screenSearch {
 				p := videoPublisher{item.ownerName, item.owner}
 				if p.videos != "" {
@@ -461,10 +488,18 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 		Background(t.Background).Border(1, t.Border).Cursor(ui.CursorPointer)
 	press := ui.Local(button, "thumbnail press", func() thumbnailPress { return thumbnailPress{} })
 	button.HandleInput(press.input).Children(func() {
+		var img *ui.Bitmap
 		if b.thumbnails != nil {
-			if img := b.thumbnails.image(item.thumbnail); img != nil {
-				ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
-			}
+			img = b.thumbnails.image(item.thumbnail)
+		}
+		if img != nil {
+			ui.Image(scope, img).Fill().Fit(ui.Contain).Radius(4).IgnoreInput(true).AccessHidden(true)
+		} else {
+			symbol, note := thumbnailFallback(item, b.thumbnails)
+			ui.Column(scope).Fill().AlignItems(ui.Center).Justify(ui.Center).IgnoreInput(true).AccessHidden(true).Children(func() {
+				ui.Text(scope, symbol).FontSize(18)
+				ui.Text(scope, note).FontSize(10).TextColor(t.TextMuted)
+			})
 		}
 	})
 	if button.Clicked() && !press.canceled {
@@ -473,5 +508,27 @@ func (b *browser) drawThumbnail(scope *ui.Context, item card) {
 		} else {
 			b.navigate(item.link)
 		}
+	}
+}
+
+// Keep the known author when moving between their collections.
+func (b *browser) applyCatalogContext(r screenRoute, p *catalogPage) {
+	if r.kind != screenUser && r.kind != screenUserLists {
+		return
+	}
+	if p.publisher.name != "" {
+		if b.userNames == nil {
+			b.userNames = make(map[string]string)
+		}
+		b.userNames[r.key] = p.publisher.name
+	}
+	name := b.userNames[r.key]
+	if name == "" {
+		name = "ユーザー" + r.key
+	}
+	if r.kind == screenUserLists {
+		p.title = name + " の公開マイリスト"
+	} else {
+		p.title = name + " の投稿動画"
 	}
 }

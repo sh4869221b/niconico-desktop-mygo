@@ -112,6 +112,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		ui.Text(c, msg).TextColor(t.TextMuted).Wrap()
 		return
 	}
+	if n.commentNotice != "" {
+		ui.Text(c, n.commentNotice).TextColor(t.TextMuted).Wrap()
+	}
 	n.commentList.Key = func(i int) any { return n.commentRows[i] }
 	follow := &n.follow
 	force := !follow.positioned || at < follow.lastAt || at-follow.lastAt > 250*time.Millisecond
@@ -125,10 +128,13 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 			}
 		}
 	}
+	group := reachedCommentGroup(at, n.allComments, n.commentRows)
 	ui.List(c, &n.commentList, len(n.commentRows), func(i int) {
 		row := n.allComments[n.commentRows[i]]
 		line := ui.Row(c).FillWidth().AlignItems(ui.Start).Padding(3, 4).Gap(6)
-		if i%2 == 0 {
+		if row.VposMs == group {
+			line.Background(t.Selection)
+		} else if i%2 == 0 {
 			line.Background(t.Surface)
 		}
 		line.ContextMenu(func(m *ui.Menu) {
@@ -138,7 +144,14 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 				c.Invalidate()
 			}
 		}).Children(func() {
-			ui.Text(c, formatPlaybackTime(time.Duration(row.VposMs)*time.Millisecond)).Width(46).TextColor(t.TextMuted)
+			label := formatPlaybackTime(time.Duration(row.VposMs) * time.Millisecond)
+			if row.VposMs == group {
+				ui.Text(c, "▶").Label("現在のコメント")
+			}
+			if ui.Button(c.Key("comment-time"), label).Label(label + "へ移動").Tooltip("このコメントの時刻へ移動（一時停止は保持）").Disabled(n.stream == nil).Clicked() {
+				n.stream.Seek(time.Duration(row.VposMs) * time.Millisecond)
+				n.follow.positioned = false
+			}
 			ui.Text(c, row.Body).Grow(1).MinWidth(0).Wrap()
 		})
 	}).Grow(1).MinHeight(0).FillWidth().Focusable().ObserveInput(func(ev ui.InputEvent) {
@@ -157,6 +170,14 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		}
 		return false
 	})
+}
+
+func reachedCommentGroup(at time.Duration, comments []timedComment, rows []int) int64 {
+	end := sort.Search(len(rows), func(i int) bool { return comments[rows[i]].VposMs > at.Milliseconds() })
+	if end == 0 {
+		return -1
+	}
+	return comments[rows[end-1]].VposMs
 }
 
 func (b *browser) drawCommentNG(c *ui.Context, n *nativePlayer) {
