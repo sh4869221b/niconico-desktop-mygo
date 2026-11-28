@@ -70,7 +70,7 @@ func (b *browser) checkLogin() {
 	b.loginCancel = cancel
 	b.loginCheck++
 	check := b.loginCheck
-	b.loginState = loginChecking
+	b.loginBusy = true
 	b.win.Invalidate()
 	go func() {
 		defer cancel()
@@ -80,6 +80,7 @@ func (b *browser) checkLogin() {
 				return
 			}
 			b.loginCancel = nil
+			b.loginBusy = false
 			b.loginState = state
 			b.win.Invalidate()
 		})
@@ -99,7 +100,7 @@ func (b *browser) watchLogin() {
 				return
 			case <-ticker.C:
 				mygo.RunOnMain(func() {
-					if b.loginState != loginChecking {
+					if !b.loginBusy {
 						b.checkLogin()
 					}
 				})
