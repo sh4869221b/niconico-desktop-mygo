@@ -67,12 +67,16 @@ func TestUndoLastRowKeepsOrderAfterNewEntry(t *testing.T) {
 	bEntry, _ := makeEntry(home+"watch/sm2", "B")
 	cEntry, _ := makeEntry(home+"watch/sm3", "C")
 	d, _ := makeEntry(home+"watch/sm4", "D")
+	e, _ := makeEntry(home+"watch/sm5", "E")
 	for _, test := range []struct {
-		name    string
-		history bool
+		name           string
+		history        bool
+		removePrevious bool
 	}{
 		{name: "pins"},
 		{name: "history", history: true},
+		{name: "pins after predecessor removal", removePrevious: true},
+		{name: "history after predecessor removal", history: true, removePrevious: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			b := &browser{index: -1, closed: true, showLibrary: true, history: test.history, libraryPath: filepath.Join(t.TempDir(), "library.json")}
@@ -90,10 +94,14 @@ func TestUndoLastRowKeepsOrderAfterNewEntry(t *testing.T) {
 			}
 			other := &browser{libraryPath: b.libraryPath}
 			_, saved := other.changeLibrary(func(data *library) bool {
+				items, limit := &data.Pins, 500
 				if test.history {
-					data.History = putFirst(data.History, d, 100)
-				} else {
-					data.Pins = putFirst(data.Pins, d, 500)
+					items, limit = &data.History, 100
+				}
+				*items = putFirst(*items, d, limit)
+				if test.removePrevious {
+					*items = slices.DeleteFunc(*items, func(item entry) bool { return item.URL == bEntry.URL })
+					*items = putFirst(*items, e, limit)
 				}
 				return true
 			})
@@ -111,7 +119,11 @@ func TestUndoLastRowKeepsOrderAfterNewEntry(t *testing.T) {
 			if test.history {
 				got = latest.History
 			}
-			if want := []entry{d, a, bEntry, cEntry}; !slices.Equal(got, want) {
+			want := []entry{d, a, bEntry, cEntry}
+			if test.removePrevious {
+				want = []entry{e, d, a, cEntry}
+			}
+			if !slices.Equal(got, want) {
 				t.Fatalf("restored order: %+v, want %+v", got, want)
 			}
 		})

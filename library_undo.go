@@ -52,9 +52,6 @@ func (b *browser) remove(e entry) {
 	})
 	// A delayed save may replay this edit without changing the undo record.
 	capture = false
-	if !changed {
-		return
-	}
 	if history && b.player != nil {
 		p := b.player
 		undo.player, undo.suppressed = p, p.historySuppressed[e.URL]
@@ -62,6 +59,9 @@ func (b *browser) remove(e entry) {
 			p.historySuppressed = make(map[string]bool)
 		}
 		p.historySuppressed[e.URL] = true
+	}
+	if !changed {
+		return
 	}
 	b.undoRemoval = undo
 	if saved {
@@ -92,14 +92,17 @@ func (b *browser) undoLibraryRemoval() {
 		if full {
 			return false
 		}
-		i := slices.IndexFunc(*items, func(x entry) bool { return x.URL == u.next })
-		if i < 0 && u.previous != "" {
-			if previous := slices.IndexFunc(*items, func(x entry) bool { return x.URL == u.previous }); previous >= 0 {
-				i = previous + 1
+		i := len(*items)
+		if u.next != "" {
+			i = slices.IndexFunc(*items, func(x entry) bool { return x.URL == u.next })
+			if i < 0 && u.previous != "" {
+				if previous := slices.IndexFunc(*items, func(x entry) bool { return x.URL == u.previous }); previous >= 0 {
+					i = previous + 1
+				}
 			}
-		}
-		if i < 0 {
-			i = min(u.index, len(*items))
+			if i < 0 {
+				i = min(u.index, len(*items))
+			}
 		}
 		*items = slices.Insert(*items, i, u.item)
 		return true
