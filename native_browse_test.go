@@ -38,7 +38,7 @@ func TestBrowseLongListNavigation(t *testing.T) {
 		}
 	}
 	// The description link scrolls with the collection.
-	click(p.links[0].title)
+	click("https://nico.ms/sm1")
 	checkRoute(r.target)
 	if app.playbackRequest != 1 {
 		t.Fatal("the inline video link did not open the selected player")
