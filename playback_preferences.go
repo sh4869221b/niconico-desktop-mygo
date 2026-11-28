@@ -110,6 +110,8 @@ func (b *browser) drawPlaybackSettings(c *ui.Context) {
 				ui.Text(c, b.playbackNotice).Wrap()
 			}
 		})
-		ui.Text(c, "どちらも別ウィンドウで開きます。独自プレーヤーで再生できない場合は公式プレーヤーで開けます。").Wrap()
+		ui.Text(c, "公式：公式の弾幕・コメント投稿・対応配信を利用できます。").Wrap()
+		ui.Text(c, "独自：日本語弾幕と端末内のローカルNGを利用できます。コメント投稿や一部の配信には対応していません。").Wrap()
+		ui.Text(c, "どちらも別ウィンドウで開きます。ここで選ぶ既定は次に開く動画から適用します。再生中の「公式 WebView で開く」はその動画だけの切替で、既定は変わりません。").Wrap()
 	})
 }
