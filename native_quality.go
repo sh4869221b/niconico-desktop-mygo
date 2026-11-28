@@ -67,7 +67,7 @@ type nativeQualityState struct {
 }
 
 func (s *nativeQualityState) apply(n *nativePlayer) {
-	n.startAt, n.pauseRequested = s.at, s.paused
+	n.startAt, n.retryAt, n.pauseRequested = s.at, s.at, s.paused
 	n.showComments, n.hideCommentPanel = s.showComments, s.hideCommentPanel
 	n.showOverview, n.showKeys = s.showOverview, s.showKeys
 	n.displayPending = false
@@ -82,10 +82,12 @@ func (b *browser) captureNativeQuality(n *nativePlayer, route screenRoute) *nati
 	state.showComments, state.hideCommentPanel = n.showComments, n.hideCommentPanel
 	state.showOverview, state.showKeys = n.showOverview, n.showKeys
 	if s := n.stream; s != nil {
-		state.paused, state.muted, state.volume = !s.Playing(), s.Muted(), s.Volume()
+		state.paused, state.muted, state.volume = s.Paused(), s.Muted(), s.Volume()
 		if s.Ready() && !s.Preparing() {
 			state.at = s.Position()
 		}
+	} else if !n.loadingStream {
+		state.at, state.paused = n.retryAt, n.retryPaused
 	}
 	return state
 }
