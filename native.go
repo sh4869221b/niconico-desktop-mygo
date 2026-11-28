@@ -202,7 +202,7 @@ func (b *browser) openOfficial(target string) {
 	b.cancelLoad()
 	b.showSearchRoute(routeFor(target))
 	b.official, b.officialTarget = true, target
-	b.loading()
+	b.beginOfficialLoading()
 	b.win.Invalidate()
 	go mygo.RunOnMain(func() {
 		if b.closed || !b.official || b.officialTarget != target {
@@ -219,6 +219,7 @@ func (b *browser) openOfficial(target string) {
 func (b *browser) closeOfficial() {
 	view := b.web
 	b.loginHelp = false
+	b.officialLoading = false
 	b.web, b.official, b.loaded = nil, false, false
 	b.source, b.status = "", ""
 	if view != nil {
@@ -243,10 +244,17 @@ func (b *browser) drawNative(c *ui.Context) {
 		return
 	}
 	r, p := b.navigation[b.index], b.result
+	message := b.resultStatus(r)
+	if message != b.announcedResult || b.epoch != b.announcedResultEpoch {
+		b.announcedResult, b.announcedResultEpoch = message, b.epoch
+		if message != "" {
+			c.Announce(message)
+		}
+	}
 	epoch := b.epoch
 	// Keep the controls in the same focus scope while changing sort or page.
 	scope := c.Key(r.kind).Key(r.key)
-	ui.Column(scope).Bind(&b.contentRegion).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Children(func() {
+	ui.Column(scope).Bind(&b.contentRegion).Grow(1).MinWidth(0).Padding(14, 16).Gap(10).Busy(b.busy).Label("結果領域").Children(func() {
 		if r.kind == screenHome {
 			ui.Text(scope, "ニコニコ動画").FontSize(29).Bold().Focusable().Bind(&b.contentFocus)
 			ui.Text(scope, "ログインせずに動画を検索できます。上の入力欄にキーワードやタグを入力してください。").Wrap()
@@ -432,6 +440,22 @@ func (b *browser) drawNative(c *ui.Context) {
 			})
 		})
 	})
+}
+
+func (b *browser) resultStatus(r screenRoute) string {
+	if r.kind == screenHome {
+		return ""
+	}
+	if b.busy {
+		return "読み込み中…"
+	}
+	if b.resultErr != nil {
+		return b.resultErr.Error()
+	}
+	if r.kind == screenVideo {
+		return "動画情報を読み込みました。"
+	}
+	return fmt.Sprintf("このページに%d件の結果を読み込みました。", len(b.result.items))
 }
 
 func (b *browser) drawSearchSort(scope *ui.Context, r screenRoute) {

@@ -202,9 +202,9 @@ func (b *browser) drawDescription(c *ui.Context, parts []descriptionPart, source
 				if ui.Link(c.Key(i), " [外部URLをコピー]", "").Label("外部URLをコピー: " + part.link.link).Clicked() {
 					c.WriteClipboardThen(part.link.link, func(err error) {
 						if err != nil {
-							b.status = "クリップボードにコピーできませんでした。"
+							b.reportStatus("クリップボードにコピーできませんでした。")
 						} else {
-							b.status = "外部URLをコピーしました。"
+							b.reportStatus("外部URLをコピーしました。")
 						}
 						c.Invalidate()
 					})
