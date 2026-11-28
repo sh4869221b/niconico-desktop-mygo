@@ -11,7 +11,9 @@ import (
 
 type longSeekVideo struct{ danmakuTestVideo }
 
-func (longSeekVideo) Duration() time.Duration                     { return 2 * time.Hour }
+const longSeekDuration = 2*time.Hour + 2*time.Second
+
+func (longSeekVideo) Duration() time.Duration                     { return longSeekDuration }
 func (longSeekVideo) Seek(d time.Duration) (time.Duration, error) { return d, nil }
 
 func TestLongVideoSeekKeys(t *testing.T) {
@@ -35,7 +37,7 @@ func TestLongVideoSeekKeys(t *testing.T) {
 	}{
 		{ui.KeyRight, 5 * time.Second}, {ui.KeyRight, 10 * time.Second}, {ui.KeyLeft, 5 * time.Second},
 		{ui.KeyPageUp, 35 * time.Second}, {ui.KeyPageDown, 5 * time.Second}, {ui.KeyHome, 0},
-		{ui.KeyLeft, 0}, {ui.KeyEnd, 2 * time.Hour}, {ui.KeyRight, 2 * time.Hour},
+		{ui.KeyLeft, 0}, {ui.KeyEnd, longSeekDuration}, {ui.KeyRight, longSeekDuration},
 	} {
 		v.Key(0, step.key)
 		if s.Position() != step.want {
