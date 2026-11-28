@@ -312,6 +312,11 @@ func (b *browser) drawNative(c *ui.Context) {
 			return
 		}
 		if b.resultErr != nil {
+			if (r.kind == screenOwnLists || r.kind == screenOwnList) && !errors.Is(b.resultErr, errSignIn) {
+				if ui.Button(scope, "ログイン状態を再確認して再取得").Disabled(b.loginBusy).Clicked() {
+					b.checkLogin()
+				}
+			}
 			ui.Text(scope, b.resultErr.Error()).Wrap()
 			if !errors.Is(b.resultErr, errSignIn) && ui.Button(scope, "再試行").Clicked() {
 				b.refreshNative()
