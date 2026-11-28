@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -60,7 +59,7 @@ type commentNG struct {
 
 type commentNGMetadata struct {
 	Title   string    `json:"title,omitempty"`
-	AddedAt time.Time `json:"addedAt,omitempty"`
+	AddedAt time.Time `json:"addedAt,omitzero"`
 }
 type commentNGRecord struct {
 	commentAuthor
@@ -117,46 +116,41 @@ func (ng *commentNG) changeWithDetails(a commentAuthor, block bool, title string
 	if ng.path == "" || !a.valid() {
 		return errors.New("invalid comment NG change")
 	}
-	if ng.blocked[a] == block {
+	return withSettingsLock(ng.path, func() error {
+		latest, err := loadCommentNG(ng.path)
+		if err != nil {
+			return err
+		}
+		if latest.blocked[a] != block {
+			if block {
+				if len(latest.blocked) >= maxCommentNGEntries {
+					return errors.New("comment NG limit reached")
+				}
+				if latest.blocked == nil {
+					latest.blocked = make(map[commentAuthor]bool)
+					latest.metadata = make(map[commentAuthor]commentNGMetadata)
+				}
+				latest.blocked[a] = true
+				titleRunes := []rune(strings.TrimSpace(title))
+				latest.metadata[a] = commentNGMetadata{Title: string(titleRunes[:min(len(titleRunes), 200)]), AddedAt: now.UTC()}
+			} else {
+				delete(latest.blocked, a)
+				delete(latest.metadata, a)
+			}
+			latest.entries = sortedCommentAuthors(latest.blocked)
+			records := make([]commentNGRecord, 0, len(latest.entries))
+			for _, author := range latest.entries {
+				records = append(records, commentNGRecord{author, latest.metadata[author]})
+			}
+			data, err := json.Marshal(records)
+			if err != nil {
+				return err
+			}
+			if err := writeSettings(ng.path, data); err != nil {
+				return err
+			}
+		}
+		*ng = latest
 		return nil
-	}
-	blocked := maps.Clone(ng.blocked)
-	if blocked == nil {
-		blocked = make(map[commentAuthor]bool)
-	}
-	if block {
-		if len(blocked) >= maxCommentNGEntries {
-			return errors.New("comment NG limit reached")
-		}
-		blocked[a] = true
-	} else {
-		delete(blocked, a)
-	}
-	metadata := maps.Clone(ng.metadata)
-	if metadata == nil {
-		metadata = make(map[commentAuthor]commentNGMetadata)
-	}
-	if block {
-		runed := []rune(strings.TrimSpace(title))
-		if len(runed) > 200 {
-			runed = runed[:200]
-		}
-		metadata[a] = commentNGMetadata{string(runed), now.UTC()}
-	} else {
-		delete(metadata, a)
-	}
-	entries := sortedCommentAuthors(blocked)
-	records := make([]commentNGRecord, 0, len(entries))
-	for _, author := range entries {
-		records = append(records, commentNGRecord{author, metadata[author]})
-	}
-	data, err := json.Marshal(records)
-	if err == nil {
-		err = writeSettings(ng.path, data)
-	}
-	if err != nil {
-		return err
-	}
-	ng.blocked, ng.entries, ng.metadata = blocked, entries, metadata
-	return nil
+	})
 }
