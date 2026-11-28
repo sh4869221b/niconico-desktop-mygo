@@ -1,9 +1,10 @@
 package main
 
 import (
-	"github.com/egoist/mygo/ui"
 	"net/http"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestVideoDetailsShowPublicIdentification(t *testing.T) {
@@ -22,6 +23,60 @@ func TestVideoDetailsShowPublicIdentification(t *testing.T) {
 		if !v.HasText(text) {
 			t.Fatal("detail fact lost", text)
 		}
+	}
+}
+
+func TestVideoDetailsOmitMissingListValuesButKeepReportedZero(t *testing.T) {
+	search := routeFor(searchURL("search", "検索する語句"))
+	watch := routeFor(home + "watch/sm9")
+	for _, source := range []string{"snapshot", "account"} {
+		t.Run(source, func(t *testing.T) {
+			c := newCatalog(nil)
+			c.http.Transport = requestFunc(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Path == "/api/getthumbinfo/sm9" {
+					return testResponse(200, `<r status="ok"><thumb><video_id>sm9</video_id><title>作品</title></thumb></r>`), nil
+				}
+				return testResponse(200, `{"meta":{"status":200,"totalCount":1},"data":[{"contentId":"sm9","title":"作品","lengthSeconds":null,"commentCounter":0,"userId":123}]}`), nil
+			})
+			var results catalogPage
+			if source == "snapshot" {
+				var err error
+				results, err = c.publicSearch(t.Context(), search)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				v, err := decodeJSON[apiVideo]([]byte(`{"id":"sm9","title":"作品","duration":null,"count":{"comment":0},"owner":{"id":123,"ownerType":"user"}}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				item, ok := v.card()
+				if !ok {
+					t.Fatal("account result missing")
+				}
+				results = catalogPage{items: []card{item}}
+			}
+			b := &browser{index: -1, closed: true, closeHelpAcknowledged: true}
+			b.navigate(search.target)
+			b.result = results
+			v := ui.NewTester(b.draw, 1000, 700)
+			if err := v.Click("作品"); err != nil {
+				t.Fatal(err)
+			}
+			if b.navigation[b.index].link != watch.link {
+				t.Fatal("list item did not select its detail page")
+			}
+			public, err := c.video(t.Context(), watch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			public.details = public.details.withFallback(b.knownVideoDetails[watch.link])
+			b.result = public
+			detail := ui.NewTester(b.draw, 1000, 700)
+			if detail.HasText("長さ:") || detail.HasText("再生:") || !detail.HasText("コメント: 0") || !detail.HasText("投稿者の種別: ユーザー") {
+				t.Fatalf("details gave missing and present fields the wrong treatment: %v", detail.Texts())
+			}
+		})
 	}
 }
 

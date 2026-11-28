@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-type videoDetails struct{ duration, posted, views, comments string }
+type videoDetails struct{ duration, posted, views, comments, publisherKind string }
 
 var videoLengthPattern = regexp.MustCompile(`^[0-9]{1,6}:[0-5][0-9]$`)
 
@@ -44,6 +44,9 @@ func (v videoDetails) withFallback(other videoDetails) videoDetails {
 	if v.comments == "" {
 		v.comments = other.comments
 	}
+	if v.publisherKind == "" {
+		v.publisherKind = other.publisherKind
+	}
 	return v
 }
 func (b *browser) rememberVideoDetails(r screenRoute) {
@@ -54,13 +57,17 @@ func (b *browser) rememberVideoDetails(r screenRoute) {
 	if b.knownVideoDetails == nil {
 		b.knownVideoDetails = make(map[string]videoDetails)
 	}
-	if len(b.knownVideoDetails) >= 100 {
+	previous, cached := b.knownVideoDetails[r.link]
+	if !cached && len(b.knownVideoDetails) >= 100 {
 		for key := range b.knownVideoDetails {
 			delete(b.knownVideoDetails, key)
 			break
 		}
 	}
-	b.knownVideoDetails[r.link] = b.result.items[i].details
+	item := b.result.items[i]
+	details := item.details
+	details.publisherKind = videoPublisherKind(item.owner)
+	b.knownVideoDetails[r.link] = details.withFallback(previous)
 }
 func videoDetailText(r screenRoute, p catalogPage) string {
 	facts := []string{"動画ID: " + r.key}
@@ -76,10 +83,22 @@ func videoDetailText(r screenRoute, p catalogPage) string {
 	if p.details.comments != "" {
 		facts = append(facts, "コメント: "+p.details.comments)
 	}
-	if owner := routeFor(p.publisher.videos); owner.kind == screenUser {
-		facts = append(facts, "投稿者の種別: ユーザー")
-	} else if u, err := url.Parse(p.publisher.videos); err == nil && u.Hostname() == "ch.nicovideo.jp" {
-		facts = append(facts, "投稿者の種別: チャンネル")
+	kind := videoPublisherKind(p.publisher.videos)
+	if kind == "" {
+		kind = p.details.publisherKind
+	}
+	if kind != "" {
+		facts = append(facts, "投稿者の種別: "+kind)
 	}
 	return strings.Join(facts, " · ")
+}
+
+func videoPublisherKind(videos string) string {
+	if routeFor(videos).kind == screenUser {
+		return "ユーザー"
+	}
+	if u, err := url.Parse(videos); err == nil && u.Hostname() == "ch.nicovideo.jp" {
+		return "チャンネル"
+	}
+	return ""
 }
