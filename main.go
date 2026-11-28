@@ -56,6 +56,7 @@ type browser struct {
 	loginCheck                   uint64
 	loginCancel, stopLoginWatch  context.CancelFunc
 	official, openingOfficial    bool
+	officialLoading              bool
 	loginHelp                    bool
 	officialTarget               string
 	officialTitleSource          string
@@ -199,6 +200,7 @@ func (b *browser) attachOfficial() {
 		Page: mygo.PageOptions{Untrusted: true, DevTools: mygo.DevToolsDisabled, Session: b.session},
 	})
 	if err != nil {
+		b.officialLoading = false
 		b.reportStatus("WebView2を起動できません。Microsoft Edge WebView2 Runtimeを確認してください。")
 		b.win.Invalidate()
 		return
@@ -243,6 +245,7 @@ func (b *browser) attachOfficial() {
 			// Do not re-enter the WebView2 callback to navigate.
 			go mygo.RunOnMain(func() {
 				if active() {
+					b.beginOfficialLoading()
 					b.loadOfficial(target)
 				}
 			})
@@ -286,8 +289,9 @@ func (b *browser) attachOfficial() {
 		b.finishOfficialPage(raw)
 		b.showSearchRoute(routeFor(raw))
 		b.checkLogin()
-		b.reportStatus("ニコニコ公式ページ")
-		if !b.loaded {
+		if b.loaded {
+			b.reportStatus("ニコニコ公式ページ")
+		} else {
 			b.reportStatus("対応するページを開いてください。")
 		}
 		b.win.Invalidate()
@@ -297,6 +301,7 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.loaded = false
+		b.officialLoading = false
 		b.reportStatus("ページを読み込めませんでした。接続を確認してください。")
 		b.win.Invalidate()
 	})
@@ -305,6 +310,7 @@ func (b *browser) attachOfficial() {
 			return
 		}
 		b.loaded = false
+		b.officialLoading = false
 		b.reportStatus("表示が終了しました。「更新」で再読み込みできます。")
 		b.win.Invalidate()
 	})
@@ -320,9 +326,17 @@ func (b *browser) attachOfficial() {
 	})
 }
 
+func (b *browser) beginOfficialLoading() {
+	b.officialLoading = false
+	b.loading()
+}
+
 func (b *browser) loading() {
 	b.loaded = false
-	b.reportStatus("読み込み中…")
+	if !b.officialLoading {
+		b.officialLoading = true
+		b.reportStatus("読み込み中…")
+	}
 	b.title, b.officialTitleSource = "", ""
 }
 
@@ -332,6 +346,7 @@ func (b *browser) loadOfficial(target string) {
 	}
 	b.loading()
 	if err := b.web.Page().LoadURL(target); err != nil {
+		b.officialLoading = false
 		b.reportStatus("ページを開けませんでした。")
 	}
 	b.win.Invalidate()
@@ -458,6 +473,7 @@ func (b *browser) updateOfficialPinTitle() {
 
 func (b *browser) finishOfficialPage(raw string) {
 	b.source, b.loaded = raw, allowedURL(raw) != nil
+	b.officialLoading = false
 	b.updateOfficialPinTitle()
 }
 
@@ -629,7 +645,7 @@ func (b *browser) toolbar(c *ui.Context) {
 			}
 			if ui.Button(c, "更新").Clicked() || c.Shortcut(0, ui.KeyF5) {
 				if p != nil {
-					b.loading()
+					b.beginOfficialLoading()
 					p.Reload()
 				} else if b.official {
 					go mygo.RunOnMain(b.attachOfficial)

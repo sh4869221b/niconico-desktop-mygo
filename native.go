@@ -202,7 +202,7 @@ func (b *browser) openOfficial(target string) {
 	b.cancelLoad()
 	b.showSearchRoute(routeFor(target))
 	b.official, b.officialTarget = true, target
-	b.loading()
+	b.beginOfficialLoading()
 	b.win.Invalidate()
 	go mygo.RunOnMain(func() {
 		if b.closed || !b.official || b.officialTarget != target {
@@ -219,6 +219,7 @@ func (b *browser) openOfficial(target string) {
 func (b *browser) closeOfficial() {
 	view := b.web
 	b.loginHelp = false
+	b.officialLoading = false
 	b.web, b.official, b.loaded = nil, false, false
 	b.source, b.status = "", ""
 	if view != nil {

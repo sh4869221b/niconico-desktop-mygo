@@ -87,3 +87,21 @@ func TestRepeatedLibraryOperationsAnnounceEveryResult(t *testing.T) {
 		})
 	}
 }
+
+func TestOfficialNavigationAnnouncesLoadingOnceForItsCallbacks(t *testing.T) {
+	b := &browser{index: -1, closeHelpAcknowledged: true, official: true}
+	v := ui.NewTester(b.draw, 960, 560)
+	v.UseScreenReader()
+	for range 2 {
+		b.beginOfficialLoading()
+		// Attach/load, WillNavigate, and DidNavigate all update the same navigation.
+		for range 3 {
+			b.loading()
+			v.Frame()
+		}
+		if got := v.Announcements(); !slices.Equal(got, []string{"読み込み中…"}) {
+			t.Fatalf("one navigation queued %v", got)
+		}
+		b.finishOfficialPage(home)
+	}
+}
