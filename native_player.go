@@ -310,7 +310,11 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 			}
 			panel := ui.Column(c).Padding(6, 8).Gap(5).Border(1, t.Border).Radius(6).Background(t.Background)
 			if compact {
-				panel.Height(min(144, h*0.21)).Shrink(0).FillWidth()
+				commentsHeight := h * 0.21
+				if h < 520 {
+					commentsHeight = h * 0.16
+				}
+				panel.Height(min(144, commentsHeight)).Shrink(0).FillWidth()
 			} else {
 				panel.Width(max(246, min(340, w*0.30))).FillHeight()
 			}
@@ -389,7 +393,13 @@ func drawNativeVideo(c *ui.Context, n *nativePlayer, current time.Duration) {
 func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height float32) {
 	// Cap each band against the window height even when controls wrap at large
 	// text sizes. The video gets the remaining space.
-	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, height*0.17)).Shrink(0).Children(func() {
+	infoHeight, overviewHeight := height*0.17, height*0.18
+	if height < 520 {
+		// At the smallest size the metadata and overview remain scrollable.
+		// Leave room for the video even when both are open and text wraps.
+		infoHeight, overviewHeight = height*0.13, height*0.13
+	}
+	ui.Scroll(c.Key("video-info")).FillWidth().MaxHeight(min(110, infoHeight)).Shrink(0).Children(func() {
 		ui.Column(c).FillWidth().Gap(4).Padding(3, 0).Children(func() {
 			ui.Row(c).FillWidth().Wrap().Gap(6).AlignItems(ui.Center).Children(func() {
 				label := "概要欄を表示"
@@ -420,7 +430,7 @@ func (b *browser) drawNativeVideoInfo(c *ui.Context, n *nativePlayer, height flo
 		})
 	})
 	if n.showOverview {
-		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, height*0.18)).Shrink(0).Focusable().Label("概要欄").Children(func() {
+		ui.Scroll(c.Key("overview")).FillWidth().MaxHeight(min(160, overviewHeight)).Shrink(0).Focusable().Label("概要欄").Children(func() {
 			ui.Column(c).FillWidth().Padding(6, 8).Background(c.Theme().Background).Children(func() {
 				if len(n.description) == 0 {
 					ui.Text(c, "概要はありません。").Wrap()
