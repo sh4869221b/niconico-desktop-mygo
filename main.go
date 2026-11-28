@@ -31,6 +31,7 @@ type browser struct {
 	pendingLibraryEdits          []func(*library) bool
 	history, loaded, closed      bool
 	showLibrary                  bool
+	focusSearch                  bool
 	closeHelpPath                string
 	closeHelpAcknowledged        bool
 	session                      *mygo.Session
@@ -516,7 +517,8 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.navigate(home)
 			}
 			input := ui.TextInput(c, &b.searchInput.field).Label("キーワード、タグ、動画IDまたはURL").Placeholder("キーワード・タグ・動画ID・URL").Grow(1).MinWidth(0)
-			if c.Shortcut(ui.Ctrl, ui.KeyL) {
+			if b.focusSearch || c.Shortcut(ui.Ctrl, ui.KeyL) {
+				b.focusSearch = false
 				input.Focus()
 			}
 			keyword := ui.PrimaryButton(c, "検索").Tooltip("キーワード検索").Checked(b.searchInput.active && !b.searchInput.byTag)
@@ -590,7 +592,11 @@ func (b *browser) sidebar(c *ui.Context) {
 			items = b.data.History
 		}
 		if len(items) == 0 {
-			ui.Text(c, "表示する項目はありません。").TextColor(c.Theme().TextMuted).Wrap()
+			notice := "視聴履歴はありません。"
+			if !b.history {
+				notice = "動画や検索結果を開き、上の「☆ 登録」でここに保存できます。"
+			}
+			ui.Text(c, notice).TextColor(c.Theme().TextMuted).Wrap()
 			return
 		}
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() {
