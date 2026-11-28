@@ -27,7 +27,7 @@ func (b *browser) drawCloseHelp(c *ui.Context) {
 			if b.closeHelpPath != "" && writeSettings(b.closeHelpPath, []byte(`{"acknowledged":true}`)) == nil {
 				b.closeHelpAcknowledged = true
 			} else {
-				b.status = "説明の確認状態を保存できませんでした。"
+				b.reportStatus("説明の確認状態を保存できませんでした。")
 			}
 		}
 	})

@@ -22,7 +22,7 @@ func libraryDeleteLabel(e entry, history bool) string {
 
 func (b *browser) remove(e entry) {
 	if b.storeWarning != "" {
-		b.status = b.storeWarning
+		b.reportStatus(b.storeWarning)
 		return
 	}
 	history := b.history
@@ -65,7 +65,7 @@ func (b *browser) remove(e entry) {
 	}
 	b.undoRemoval = undo
 	if saved {
-		b.status = libraryDeleteLabel(undo.item, history) + "しました。"
+		b.reportStatus(libraryDeleteLabel(undo.item, history) + "しました。")
 	}
 }
 
@@ -75,7 +75,7 @@ func (b *browser) undoLibraryRemoval() {
 		return
 	}
 	if b.storeWarning != "" {
-		b.status = b.storeWarning
+		b.reportStatus(b.storeWarning)
 		return
 	}
 	var full bool
@@ -109,7 +109,7 @@ func (b *browser) undoLibraryRemoval() {
 	})
 	if full {
 		if saved {
-			b.status = "件数が上限のため元に戻せません。"
+			b.reportStatus("件数が上限のため元に戻せません。")
 		}
 		return
 	}
@@ -118,6 +118,6 @@ func (b *browser) undoLibraryRemoval() {
 	}
 	b.undoRemoval = nil
 	if saved {
-		b.status = u.item.Title + "を元に戻しました。"
+		b.reportStatus(u.item.Title + "を元に戻しました。")
 	}
 }
