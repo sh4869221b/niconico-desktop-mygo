@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -127,5 +128,33 @@ func TestUndoLastRowKeepsOrderAfterNewEntry(t *testing.T) {
 				t.Fatalf("restored order: %+v, want %+v", got, want)
 			}
 		})
+	}
+}
+
+func TestLibraryUndoPersistsAfterStorageRecovers(t *testing.T) {
+	a, _ := makeEntry(home+"watch/sm1", "A")
+	bEntry, _ := makeEntry(home+"watch/sm2", "B")
+	c, _ := makeEntry(home+"watch/sm3", "C")
+	path := filepath.Join(t.TempDir(), "library.json")
+	p := &playerWindow{}
+	b := &browser{libraryPath: path, data: library{History: []entry{a, bEntry}}, history: true, player: p}
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b.remove(bEntry)
+	b.undoLibraryRemoval()
+	if len(b.pendingLibraryEdits) != 2 || p.historySuppressed[bEntry.URL] || !slices.Equal(b.data.History, []entry{a, bEntry}) {
+		t.Fatalf("undo did not restore the local history: %+v", b.data.History)
+	}
+	if err := saveLibrary(path, library{History: []entry{a, bEntry}}); err != nil {
+		t.Fatal(err)
+	}
+	b.recordVideo(p, c.URL, c.Title)
+	latest, err := loadLibrary(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []entry{c, a, bEntry}; len(b.pendingLibraryEdits) != 0 || !slices.Equal(latest.History, want) {
+		t.Fatalf("persisted history: %+v, want %+v", latest.History, want)
 	}
 }
