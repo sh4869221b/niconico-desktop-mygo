@@ -39,9 +39,10 @@ func playerShareURLs(p *playerWindow, live playbackPage) (string, string) {
 	raw := p.target
 	webWatch := screenRoute{}
 	if p.native == nil && live != nil && p.document.loaded && !p.document.loading && p.failedWebTarget == "" && !p.replaceFailedWebView && !live.IsLoading() {
-		webWatch = routeFor(live.URL())
-		if webWatch.kind == screenVideo {
-			raw = webWatch.link
+		shown := routeFor(live.URL())
+		// The requested video can already have changed before WebView signals loading.
+		if shown.kind == screenVideo && shown.link == p.webVideo {
+			webWatch, raw = shown, shown.link
 		}
 	}
 	base, _ := canonical(raw)

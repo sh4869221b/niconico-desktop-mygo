@@ -30,7 +30,7 @@ func TestSearchSharePreservesDisplayedConditions(t *testing.T) {
 }
 func TestPlayerSharesOnlyVerifiedPosition(t *testing.T) {
 	r := routeFor(home + "watch/sm9")
-	p := &playerWindow{target: r.target, playedWatch: r, playedVideo: "sm9", playedPosition: &webPlaybackPosition{seconds: 123.9}, document: playerDocument{video: r.link, loaded: true}}
+	p := &playerWindow{target: r.target, webVideo: r.link, playedWatch: r, playedVideo: "sm9", playedPosition: &webPlaybackPosition{seconds: 123.9}, document: playerDocument{video: r.link, loaded: true}}
 	live := reopenPage{url: r.target}
 	v := ui.NewTester(func(c *ui.Context) { p.drawSharing(c, live) }, 800, 300)
 	if err := v.Click("この時点のURLをコピー"); err != nil {
@@ -60,13 +60,14 @@ func TestPlayerSharingRejectsOldWebViewStateDuringNavigation(t *testing.T) {
 		want  string
 	}{
 		{"reloading", reopenPage{url: old}, func(p *playerWindow) { p.document.begin() }, next},
+		{"waiting for navigation callback", reopenPage{url: old}, func(*playerWindow) {}, next},
 		{"live loading", reopenPage{url: old, loading: true}, func(*playerWindow) {}, next},
 		{"renderer gone", reopenPage{url: old}, func(p *playerWindow) { p.document.loaded = false }, next},
 		{"retained failed document", reopenPage{url: old}, func(p *playerWindow) { p.failedWebTarget = next }, next},
 		{"changed before observing", reopenPage{url: next}, func(*playerWindow) {}, next},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := &playerWindow{target: next, playedWatch: routeFor(old), playedVideo: "sm9", playedPosition: &webPlaybackPosition{seconds: 40}, document: playerDocument{video: old, loaded: true}}
+			p := &playerWindow{target: next, webVideo: next, playedWatch: routeFor(old), playedVideo: "sm9", playedPosition: &webPlaybackPosition{seconds: 40}, document: playerDocument{video: old, loaded: true}}
 			tc.setup(p)
 			v := ui.NewTester(func(c *ui.Context) { p.drawSharing(c, tc.live) }, 800, 300)
 			if err := v.Click("動画URLをコピー"); err != nil || v.Clipboard() != tc.want {
