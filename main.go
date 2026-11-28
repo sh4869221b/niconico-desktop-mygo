@@ -31,6 +31,8 @@ type browser struct {
 	pendingLibraryEdits          []func(*library) bool
 	history, loaded, closed      bool
 	showLibrary                  bool
+	layoutPath                   string
+	layoutLoadErr                error
 	focusSearch                  bool
 	closeHelpPath                string
 	closeHelpAcknowledged        bool
@@ -87,6 +89,8 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		b.layoutPath = filepath.Join(dir, "NiconicoDesktopMyGo", "layout.json")
+		b.showLibrary, b.layoutLoadErr = loadSidebarVisibility(b.layoutPath)
 		if audio, err := loadNativeAudio(b.nativeAudioPath()); err == nil {
 			b.nativeVolume, b.nativeMuted = audio.Volume, audio.Muted
 		} else {
@@ -111,7 +115,7 @@ func (b *browser) start(initial string) {
 		b.storeWarning = "保存先を取得できません。"
 	}
 	b.win = mygo.NewWindow(mygo.WindowOptions{
-		Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
+		StateKey: "main", Title: appName + " " + version, Width: 1260, Height: 850, MinWidth: 640, MinHeight: 520,
 		Content: ui.View(b.draw), Page: mygo.PageOptions{DevTools: mygo.DevToolsDisabled},
 	})
 	_ = b.win.SetIcon(appIconPNG)
@@ -548,7 +552,7 @@ func (b *browser) toolbar(c *ui.Context) {
 				b.leaveOfficial()
 			}
 			if ui.Button(c, "登録・履歴").Checked(b.showLibrary).Clicked() {
-				b.showLibrary = !b.showLibrary
+				b.toggleLibrary()
 			}
 			if ui.Button(c, "結果へ移動").Disabled(b.official).Tooltip("本文へ移動（F6 で領域間を移動、Shift+F6 で逆順）").Clicked() {
 				b.contentFocus.Focus(c)
