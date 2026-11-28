@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -46,8 +47,8 @@ func TestKeyboardCanNGSelectedCommentAndFocusNext(t *testing.T) {
 		t.Fatalf("first comment's selection was obscured by the stripe: %v", unselected)
 	}
 	v.Key(ui.Shift, ui.KeyF10)
-	if len(v.Menu()) != 1 {
-		t.Fatal("keyboard menu missing")
+	if !slices.Contains(v.Menu(), commentNGScope(commentAuthor{ID: "2"})) {
+		t.Fatal("keyboard menu did not disclose which videos the NG applies to")
 	}
 	if err := v.ChooseMenuItem("このユーザーを NG"); err != nil {
 		t.Fatal(err)
