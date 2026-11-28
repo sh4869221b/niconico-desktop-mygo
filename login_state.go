@@ -70,7 +70,9 @@ func (b *browser) checkLogin() {
 	b.loginCancel = cancel
 	b.loginCheck++
 	check := b.loginCheck
-	b.loginState = loginChecking
+	retryList := !b.official && b.index >= 0 && (b.navigation[b.index].kind == screenOwnLists || b.navigation[b.index].kind == screenOwnList) && b.resultErr != nil
+	epoch := b.epoch
+	b.loginBusy = true
 	b.win.Invalidate()
 	go func() {
 		defer cancel()
@@ -80,7 +82,11 @@ func (b *browser) checkLogin() {
 				return
 			}
 			b.loginCancel = nil
+			b.loginBusy = false
 			b.loginState = state
+			if retryList && !b.official && b.epoch == epoch {
+				b.refreshNative()
+			}
 			b.win.Invalidate()
 		})
 	}()
@@ -99,7 +105,7 @@ func (b *browser) watchLogin() {
 				return
 			case <-ticker.C:
 				mygo.RunOnMain(func() {
-					if b.loginState != loginChecking {
+					if !b.loginBusy {
 						b.checkLogin()
 					}
 				})

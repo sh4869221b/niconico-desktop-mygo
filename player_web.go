@@ -18,8 +18,10 @@ import (
 var webPlayerPreload string
 
 type webPlaybackPosition struct {
-	seconds float64
-	paused  bool
+	seconds  float64
+	paused   bool
+	duration float64
+	ended    bool
 }
 
 type webPlaybackRestore struct {
@@ -78,7 +80,7 @@ func (p *playerWindow) captureWebPosition(page *mygo.Page) {
 	played, id, position := p.playedWatch, p.playedVideo, p.playedPosition
 	ctx, cancel := context.WithTimeout(context.Background(), webSourceInterval)
 	defer cancel()
-	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.snapshot() ?? null`)
+	value, err := page.EvalContext(ctx, `window.__nicoDesktopMedia?.historySnapshot() ?? null`)
 	if err == nil && p.view != nil && p.playedWatch == played && p.playedVideo == id && p.playedPosition == position &&
 		p.document.revision == revision && page.URL() == source {
 		p.recordWebSnapshot(value, routeFor(source))
@@ -87,7 +89,7 @@ func (p *playerWindow) captureWebPosition(page *mygo.Page) {
 
 func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
 	fields, ok := value.([]any)
-	if !ok || len(fields) != 4 {
+	if !ok || len(fields) != 4 && len(fields) != 6 {
 		return
 	}
 	raw, urlOK := fields[0].(string)
@@ -97,16 +99,33 @@ func (p *playerWindow) recordWebSnapshot(value any, source screenRoute) {
 	if !urlOK || !idOK || !watchSegment.MatchString(video) || !timeOK || !pauseOK || !(seconds >= 0 && seconds < 1<<33) {
 		return
 	}
+	duration, ended := float64(0), false
+	if len(fields) == 6 {
+		var durationOK, endedOK bool
+		duration, durationOK = fields[4].(float64)
+		ended, endedOK = fields[5].(bool)
+		if !durationOK || !endedOK || !(duration >= 0 && duration < 1<<33) {
+			return
+		}
+	}
 	watch := routeFor(raw)
 	if watch.kind != screenVideo || watch.key != video && !numeric(watch.key, 20) ||
 		source.kind == screenVideo && source.link != watch.link {
 		return
 	}
+	if state := p.restoring; state != nil && state.video == "" {
+		// A numeric watch path may be an alias. Only a bridge sample from
+		// its committed route has verified the real media session's ID.
+		if source.kind != screenVideo || source.key != state.routeID || watch.key != state.routeID {
+			return
+		}
+		state.video = video
+	}
 	// The bridge can still offer B's last sample after a same-document search.
 	// Completing a restore for B takes precedence over B's transient initial state.
 	p.notePlayedWatch(watch, video)
 	if p.restoring == nil {
-		p.playedPosition = &webPlaybackPosition{seconds: seconds, paused: paused}
+		p.playedPosition = &webPlaybackPosition{seconds: seconds, paused: paused, duration: duration, ended: ended}
 	}
 }
 
@@ -145,7 +164,7 @@ func (p *playerWindow) showWebRestoreFailure() {
 
 func (p *playerWindow) applyWebRestore(page *mygo.Page, route screenRoute) {
 	state := p.restoring
-	if state == nil || !state.matches(route) {
+	if state == nil || state.video == "" || !state.matches(route) {
 		return
 	}
 	encodedVideo, _ := json.Marshal(state.video)

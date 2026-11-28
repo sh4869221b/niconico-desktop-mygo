@@ -86,7 +86,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             time.sleep(self.server.latency)
             self.send_response(status)
             self.send_header("Content-Length", str(end - start + 1))
-            self.send_header("Content-Type", "application/vnd.apple.mpegurl" if path.suffix == ".m3u8" else mimetypes.guess_type(path)[0] or "application/octet-stream")
+            content_type = {".m3u8": "application/vnd.apple.mpegurl", ".ts": "video/mp2t"}.get(path.suffix)
+            self.send_header("Content-Type", content_type or mimetypes.guess_type(path)[0] or "application/octet-stream")
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Cache-Control", "no-store")
             if status == 206:
