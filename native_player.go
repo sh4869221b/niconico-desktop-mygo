@@ -42,6 +42,8 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	videoID               string
+	handoffKnown          bool
 	retryAt               time.Duration
 	retryPaused           bool
 	showKeys              bool
@@ -108,6 +110,7 @@ func (b *browser) loadNativePlayerAt(p *playerWindow, route screenRoute, at time
 				return
 			}
 			n.loadingStream, n.relay = false, relay
+			n.videoID = source.watch.Video.ID
 			if err != nil {
 				n.failStream(err.Error())
 			} else if n.stream, err = video.OpenURL(local); err != nil {
@@ -157,8 +160,9 @@ func (n *nativePlayer) failStream(message string) {
 	n.retryPaused = n.pauseRequested
 	if n.stream != nil {
 		n.retryPaused = n.stream.Paused()
-		if n.stream.Ready() && !n.stream.Preparing() && n.stream.Err() == nil {
-			n.retryAt = n.stream.Position()
+		n.pauseRequested = n.retryPaused
+		if at, ok := n.stream.ConfirmedPosition(); ok {
+			n.retryAt, n.handoffKnown = at, true
 		}
 	}
 	if n.relay != nil {
@@ -337,9 +341,11 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				b.recordVideo(p, p.target, p.title)
 			}
 		}
-		current := s.Position()
-		if s.Ready() && !s.Preparing() {
-			n.retryAt = current
+		current, confirmed := s.ConfirmedPosition()
+		if confirmed {
+			n.retryAt, n.handoffKnown = current, true
+		} else {
+			current = s.Position()
 		}
 		compact := w < 780
 		var body ui.Element
