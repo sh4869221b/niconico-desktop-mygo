@@ -589,6 +589,7 @@ func (w *window) message(m uint32, wp, lp uintptr) (uintptr, bool) {
 			return 0, true // the page gets it back once the menus close
 		}
 		if w.surface != nil {
+			w.surface.traceFocus("parent_wm_set_focus", wp, 0, nil, true)
 			procSetFocus.Call(w.surface.hwnd)
 		} else {
 			w.focusWebView()

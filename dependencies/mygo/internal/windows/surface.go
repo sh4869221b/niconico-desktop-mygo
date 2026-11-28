@@ -975,9 +975,11 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 	case wmGetDlgCode:
 		return dlgcWantAllKeys | dlgcWantChars, true
 	case wmSetFocus:
+		s.traceFocus("surface_wm_set_focus", wp, 0, nil, true)
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceFocus})
 		return 0, true
 	case wmKillFocus:
+		s.traceFocus("surface_wm_kill_focus", wp, 0, nil, false)
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
 		return 0, true
 	case wmKeyDown, wmSysKeyDown:

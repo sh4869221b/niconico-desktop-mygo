@@ -1,9 +1,9 @@
 # #57: 別窓・公式 WebView からのフォーカスと読み上げ
 
-状態: **NucBox で UIA フォーカスの不一致を再現。修正候補の再試験と読み上げは未実施**。
+状態: **NucBox で通知変更後も UIA フォーカスの不一致を再現。読み上げと原因の切り分けは未確認**。
 Windows x64 artifact `15267190837`、main `5d178f00d545b2ae57c5a1c955f631d8e3cab3ec`（[Windows CI](https://github.com/sh4869221b/niconico-desktop-mygo/actions/runs/46153497683)）を専用プロファイルで起動した。公開動画 `sm1097445` の詳細から公式 WebView 別窓を開き、Alt+F4 で閉じてメインで Tab を一度押すと「音楽」タグに枠が付き、Enter でタグ検索へ遷移した。UIA が返した focused 要素は検索欄のままだった。Alt+Left での戻りと F6 の領域移動でも、描画と UIA の差が見られた。
 
-Windows の UIA プロバイダーは仮想要素間でフォーカスが動いたとき、UIA イベントの購読がなくても Windows のフォーカス通知を送る。これまでフォーカス移動の通知は購読状態に従っていた。アプリのフォーカス移動先は変えない。
+NucBox で PR #114 の `757f8613031f0d7faffe6a3f8bed288bb5cc0a84`、Windows x64 artifact `15266374986` を未ログイン・隔離プロファイルで再試験した。購読状態にかかわらず Windows の通知を送る候補でも、Tab 後に「音楽」の青枠とタグ検索を確認し、Windows のアクセシビリティ表示は検索欄を focused と判定した。
 自動テストは、ウィンドウのフォーカス復帰、Tab・F6 が選んだ要素と native accessibility tree の一致、および購読がない場合の Windows プロバイダーの通知経路を検証する。実際の Windows UIA クライアント、別窓の WebView2、Narrator / NVDA の発話は以下で確認する。
 
 ```powershell
@@ -51,6 +51,24 @@ Remove-Job $job
 
 `global_focus`（対象プロセス内の名前と role）、`global_focus_process_id`、各窓の UIA `focused` / `focusable` / `bounds` と録画を対応付ける。WebView2 の子要素は別プロセスになる場合があるため、PID だけで一致/不一致を断定しない。truncated=true、要素消失、provider エラーは記録不足とする。
 UIA snapshot は 1 時点の tree であり、読み上げの発話やイベント順を保証しない。スクリプトは UI 操作・設定変更を行わない。
+
+## Windows プロバイダーとクライアントの照合
+
+検証用 EXE の起動 PowerShell で、新しい絶対パスを `MYGO_UIA57_TRACE` に設定する。既存の隔離プロファイルで起動したプロセスだけに設定を継承し、終了後に変数を取り除く。
+
+```powershell
+$env:MYGO_UIA57_TRACE = Join-Path ([System.IO.Path]::GetTempPath()) ("mygo-uia57-" + [guid]::NewGuid() + ".jsonl")
+$tracePath = $env:MYGO_UIA57_TRACE
+# 検証用を隔離プロファイルで起動し、次の試行を実施
+Remove-Item Env:MYGO_UIA57_TRACE
+```
+
+1. メインの詳細を表示した状態でバックグラウンドからスナップショットを 1 回取得し、UIA ツリーを有効にする。
+2. `sm1097445` の詳細から公式 WebView 別窓を開く。上の `Start-Job` で別の出力を事前予約したうえで、別窓を Alt+F4 で閉じてメインで Tab を一度押す。取得が終わるまでフォーカスを変えずに「音楽」の青枠を記録する。その後 Enter でタグ検索を確認する。同じ現象を普段のアクセシビリティ表示と、新しく起動したスナップショットの両方で確認する。
+3. スナップショットの `global_focus_started_utc` と `global_focus_finished_utc` の範囲を JSONL と照合する。`parent_wm_set_focus` と `surface_wm_set_focus` で親から native surface への復帰、`foreground_focus_hwnd` で前面入力キューを確認する。`tree_received` の `tree_focus` は描画後に UI が渡した ID、`focus_committed` はプロバイダーが公開した ID。続く `provider_get_focus` と `provider_has_keyboard_focus` の応答を同時刻の Windows クライアント結果と比べる。
+4. HWND が戻っていなければ復帰経路を調べる。描画後のツリーに新しい ID が現れなければ UI からツリーまでを調べる。新しい ID を `GetFocus` が返し、対応要素の真偽も一致するのにクライアントの結果だけが古ければ、クライアントまたは UIA のキャッシュを調べる。クライアントの問い合わせに該当するコールバックがなければ、別プロバイダーの選択も切り分ける。
+
+診断ファイルは新規作成時だけ書き込む。最大 12,000 行で、記録するのはイベント、UTC、数値のウィンドウ・要素 ID、role、真偽だけ。名前、入力文字列、URL は含まない。I/O を伴うので、診断なしでの挙動と比較し、所要時間の測定には使わない。
 
 | SHA / 読み上げ/版 | 遷移/操作 | 復帰直後の窓と画面枠 | UIA focused の名前/role | 最初の発話 / 重複 | 最初の Tab 後 | 判定 |
 |---|---|---|---|---|---|---|

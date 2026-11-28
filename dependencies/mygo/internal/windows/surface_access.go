@@ -439,6 +439,9 @@ func (s *surface) getObject(wp, lp uintptr) (uintptr, bool) {
 // tells its clients what changed.
 func (s *surface) UpdateAccessibility(tree *platform.AccessTree) {
 	if t := s.access; t != nil && tree != nil {
+		if tree.Focus != t.focus {
+			s.traceFocus("tree_received", 0, tree.Focus, t.nodes[t.focus], t.quiet)
+		}
 		t.update(tree)
 	}
 }
@@ -625,6 +628,7 @@ func (t *uiaTree) update(tree *platform.AccessTree) {
 	t.spareNodes = old
 	if tree.Focus != t.focus {
 		t.focus = tree.Focus
+		t.s.traceFocus("focus_committed", 0, t.focus, t.nodes[t.focus], notify)
 		if e := t.nodes[t.focus]; e != nil && !t.quiet {
 			if notify {
 				procUiaRaiseAutomationEvent.Call(e.ptr(ifaceSimple), uiaFocusChangedEvent)
@@ -1014,7 +1018,9 @@ func initUIA() {
 			if e == nil {
 				return hr
 			}
-			return out(p, e.tree.nodes[e.tree.focus], ifaceFragment)
+			focus := e.tree.nodes[e.tree.focus]
+			e.tree.s.traceFocus("provider_get_focus", 0, e.tree.focus, focus, focus != nil)
+			return out(p, focus, ifaceFragment)
 		}),
 	)
 
@@ -1238,7 +1244,9 @@ func (e *uiaElement) property(id int, v *variant) {
 	case uiaNameProperty:
 		str(n.Label)
 	case uiaHasKeyboardFocusProperty:
-		*v = boolVariant(n.ID == e.tree.focus)
+		focused := n.ID == e.tree.focus
+		e.tree.s.traceFocus("provider_has_keyboard_focus", 0, e.tree.focus, e, focused)
+		*v = boolVariant(focused)
 	case uiaIsFocusableProperty:
 		*v = boolVariant(n.States&platform.AccessFocusable != 0)
 	case uiaIsEnabledProperty:
