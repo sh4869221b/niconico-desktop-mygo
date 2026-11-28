@@ -60,6 +60,8 @@ type browser struct {
 	playbackPath, playbackNotice string
 	commentNG                    commentNG
 	nativeVolume                 float64
+	nativeDisplay                nativeDisplayPreferences
+	nativeDisplayNotice          string
 	nativeMuted                  bool
 	nativeAudioNotice            string
 
@@ -89,6 +91,11 @@ func (b *browser) start(initial string) {
 	b.nativeVolume = defaultNativeVolume
 	if dir, err := os.UserConfigDir(); err == nil {
 		b.playbackPath = filepath.Join(dir, "NiconicoDesktopMyGo", "playback.json")
+		if prefs, err := loadNativeDisplay(b.nativeDisplayPath()); err == nil {
+			b.nativeDisplay = prefs
+		} else {
+			b.nativeDisplayNotice = "表示設定を読み込めませんでした。"
+		}
 		b.layoutPath = filepath.Join(dir, "NiconicoDesktopMyGo", "layout.json")
 		b.showLibrary, b.layoutLoadErr = loadSidebarVisibility(b.layoutPath)
 		if audio, err := loadNativeAudio(b.nativeAudioPath()); err == nil {
