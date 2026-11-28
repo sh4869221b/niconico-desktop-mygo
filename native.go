@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -279,6 +280,17 @@ func (b *browser) drawNative(c *ui.Context) {
 					b.pageNative(-1)
 				}
 				ui.Text(scope, fmt.Sprintf("%d ページ", r.page+1))
+				if r.kind == screenSearch {
+					pageControls := ui.Row(scope.Key(r.page)).Gap(4)
+					value := ui.Local(pageControls, "page number", func() string { return strconv.Itoa(r.page + 1) })
+					pageControls.Children(func() {
+						input := ui.TextInput(scope, value).Label("移動先ページ").Width(72)
+						page, valid := p.searchPageNumber(*value)
+						if ui.Button(scope, "指定ページへ").Disabled(b.busy || !valid).Clicked() || input.Submitted() && !b.busy && valid {
+							b.openNative(r.withPage(page), true)
+						}
+					})
+				}
 				if ui.Button(scope, "次へ").Disabled(b.busy || !p.more || r.page == maxCatalogPage).Clicked() {
 					b.pageNative(1)
 				}
@@ -286,6 +298,9 @@ func (b *browser) drawNative(c *ui.Context) {
 		}
 		if b.epoch != epoch {
 			return
+		}
+		if r.kind == screenSearch && !b.busy && b.resultErr == nil {
+			ui.Text(scope, p.searchRange(r)).TextColor(t.TextMuted).Wrap()
 		}
 		if b.busy {
 			ui.Text(scope, "読み込み中…").TextColor(t.TextMuted)
