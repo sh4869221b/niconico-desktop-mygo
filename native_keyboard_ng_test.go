@@ -15,9 +15,9 @@ func TestKeyboardCanNGSelectedCommentAndFocusNext(t *testing.T) {
 	defer s.Close()
 	s.Pause()
 	n := &nativePlayer{stream: s, recorded: true, allComments: []timedComment{
-		{Body: "first", author: commentAuthor{ID: "1"}},
-		{Body: "target", author: commentAuthor{ID: "2"}},
-		{Body: "next unknown"},
+		{VposMs: 1000, Body: "first", author: commentAuthor{ID: "1"}},
+		{VposMs: 2000, Body: "target", author: commentAuthor{ID: "2"}},
+		{VposMs: 3000, Body: "next unknown"},
 	}}
 	n.applyCommentNG(nil)
 	b := &browser{commentNG: commentNG{path: filepath.Join(t.TempDir(), "ng.json")}}
@@ -30,9 +30,19 @@ func TestKeyboardCanNGSelectedCommentAndFocusNext(t *testing.T) {
 		t.Fatal("list not keyboard reachable")
 	}
 	v.Key(0, ui.KeyHome)
+	first, found := v.Access("first")
+	if !found || first.Offscreen {
+		t.Fatal("first comment is outside the viewport")
+	}
+	x := int(first.Bounds.X + first.Bounds.W - 12)
+	y := int(first.Bounds.Y + first.Bounds.H/2)
+	selected := v.Image().RGBAAt(x, y)
 	v.Key(0, ui.KeyDown)
 	if n.selectedComment != 1 {
 		t.Fatalf("arrow did not select target: %d", n.selectedComment)
+	}
+	if unselected := v.Image().RGBAAt(x, y); unselected == selected {
+		t.Fatalf("first comment's selection was obscured by the stripe: %v", unselected)
 	}
 	v.Key(ui.Shift, ui.KeyF10)
 	if len(v.Menu()) != 1 {
