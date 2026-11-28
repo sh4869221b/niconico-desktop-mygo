@@ -8173,6 +8173,15 @@ func (_handle Element) Step(step float64) Element {
 	return wrapElement(_node.Step(step))
 }
 
+// KeyboardStep sets arrow and page-key increments without snapping pointer input.
+func (_handle Element) KeyboardStep(arrow, page float64) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	return wrapElement(_node.KeyboardStep(arrow, page))
+}
+
 // Sticky keeps the element in its parent's flow, where it takes its room,
 // and holds it inside the scroll container around it while its parent is
 // in view, as CSS's position: sticky does: Top, Right, Bottom and Left (or

@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/egoist/mygo/ui"
 	"io"
 	"os"
 	"slices"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func loadHistoryRecording(path string) (bool, error) {
@@ -32,6 +33,18 @@ func loadHistoryRecording(path string) (bool, error) {
 	}
 	return !*value.RecordHistory, nil
 }
+func (b *browser) canRecordHistory() bool {
+	// Called under the library transaction lock when writing history.
+	if b.historySettingsErr != nil {
+		return false
+	}
+	if b.historySettingsPath == "" {
+		return !b.historyDisabled
+	}
+	disabled, err := loadHistoryRecording(b.historySettingsPath)
+	return err == nil && !disabled
+}
+
 func (b *browser) setHistoryRecording(record bool) {
 	if b.historySettingsErr != nil {
 		b.historyNotice = "履歴設定を読み込めないため上書きしません。元ファイルを確認してください。"
@@ -40,7 +53,12 @@ func (b *browser) setHistoryRecording(record bool) {
 	data, _ := json.Marshal(struct {
 		RecordHistory bool `json:"recordHistory"`
 	}{record})
-	if b.historySettingsPath == "" || writeSettings(b.historySettingsPath, data) != nil {
+	if err := withSettingsLock(b.libraryPath, func() error {
+		if _, err := loadHistoryRecording(b.historySettingsPath); err != nil {
+			return err
+		}
+		return writeSettings(b.historySettingsPath, data)
+	}); err != nil {
 		b.historyNotice = "履歴設定を保存できませんでした。"
 		return
 	}
@@ -63,23 +81,39 @@ func (b *browser) eraseSelectedHistory() {
 		b.historyNotice = b.storeWarning
 		return
 	}
-	removed := 0
-	b.data.History = slices.DeleteFunc(b.data.History, func(e entry) bool {
-		selected := slices.ContainsFunc(b.historyErasePending, func(old entry) bool { return e.URL == old.URL && e.LastViewedAt.Equal(old.LastViewedAt) })
-		if selected {
-			removed++
-			if p := b.player; p != nil {
-				if p.historySuppressed == nil {
-					p.historySuppressed = make(map[string]bool)
-				}
-				p.historySuppressed[e.URL] = true
+	selected := make(map[string]time.Time, len(b.historyErasePending))
+	for _, item := range b.historyErasePending {
+		selected[item.URL] = item.LastViewedAt
+	}
+	var removed []string
+	changed, saved := b.changeLibrary(func(data *library) bool {
+		removed = removed[:0]
+		data.History = slices.DeleteFunc(data.History, func(e entry) bool {
+			viewedAt, ok := selected[e.URL]
+			if !ok || !e.LastViewedAt.Equal(viewedAt) {
+				return false
+			}
+			removed = append(removed, e.URL)
+			return true
+		})
+		return len(removed) != 0
+	})
+	if changed {
+		if p := b.player; p != nil {
+			if p.historySuppressed == nil {
+				p.historySuppressed = make(map[string]bool)
+			}
+			for _, raw := range removed {
+				p.historySuppressed[raw] = true
 			}
 		}
-		return selected
-	})
+		if b.undoRemoval != nil && b.undoRemoval.history {
+			b.undoRemoval = nil
+		}
+	}
 	b.historyErasePending = nil
-	if b.persist() {
-		b.historyNotice = fmt.Sprintf("視聴履歴を %d 件消去しました。登録済み項目は保持しています。", removed)
+	if saved {
+		b.historyNotice = fmt.Sprintf("視聴履歴を %d 件消去しました。登録済み項目は保持しています。", len(removed))
 	} else {
 		b.historyNotice = b.status
 	}

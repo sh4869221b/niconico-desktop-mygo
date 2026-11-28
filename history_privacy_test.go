@@ -1,11 +1,11 @@
 package main
 
 import (
-	"github.com/egoist/mygo"
-	"github.com/egoist/mygo/ui"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestHistoryRecordingChoiceIsVisible(t *testing.T) {
@@ -30,9 +30,9 @@ func TestHistoryRecordingDefaultStopAndPeriodErase(t *testing.T) {
 	old.LastViewedAt = now.Add(-40 * 24 * time.Hour)
 	legacy, _ := makeEntry(home+"watch/sm3", "legacy")
 	p := &playerWindow{}
-	b := &browser{win: new(mygo.Window), player: p, libraryPath: filepath.Join(dir, "library.json"), historySettingsPath: path, data: library{Pins: []entry{recent}, History: []entry{recent, old, legacy}}}
-	if !b.persist() {
-		t.Fatal("fixture not saved")
+	b := &browser{player: p, libraryPath: filepath.Join(dir, "library.json"), historySettingsPath: path, data: library{Pins: []entry{recent}, History: []entry{recent, old, legacy}}}
+	if err := saveLibrary(b.libraryPath, b.data); err != nil {
+		t.Fatal(err)
 	}
 	b.setHistoryRecording(false)
 	disabled, err = loadHistoryRecording(path)
@@ -64,9 +64,47 @@ func TestEraseConfirmationDoesNotDeleteNewerVisit(t *testing.T) {
 	e, _ := makeEntry(home+"watch/sm9", "video")
 	e.LastViewedAt = time.Now().UTC().Add(-time.Hour)
 	b := &browser{libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{History: []entry{e}}, historyErasePending: []entry{e}}
-	b.data.History[0].LastViewedAt = time.Now().UTC()
+	newer := e
+	newer.LastViewedAt = time.Now().UTC()
+	if err := saveLibrary(b.libraryPath, library{History: []entry{newer}}); err != nil {
+		t.Fatal(err)
+	}
 	b.eraseSelectedHistory()
-	if len(b.data.History) != 1 {
+	if len(b.data.History) != 1 || !b.data.History[0].LastViewedAt.Equal(newer.LastViewedAt) {
 		t.Fatal("confirmation erased a newer visit")
+	}
+}
+
+func TestLegacyVisitGetsADateBeforeDeduplication(t *testing.T) {
+	const title = "同じタイトル"
+	for _, incoming := range []string{title, ""} {
+		e, _ := makeEntry(home+"watch/sm9", title)
+		p := &playerWindow{}
+		b := &browser{player: p, libraryPath: filepath.Join(t.TempDir(), "library.json"), data: library{History: []entry{e}}}
+		if err := saveLibrary(b.libraryPath, b.data); err != nil {
+			t.Fatal(err)
+		}
+		b.recordVideo(p, e.URL, incoming)
+		got, err := loadLibrary(b.libraryPath)
+		if err != nil || len(got.History) != 1 || got.History[0].Title != title || len(historyInPeriod(got.History, "過去24時間", time.Now())) != 1 {
+			t.Fatalf("revisited history remained undated or lost its title: %+v (%v)", got.History, err)
+		}
+		b.recordVideo(p, e.URL, title+" 更新")
+		if !b.data.History[0].LastViewedAt.Equal(got.History[0].LastViewedAt) {
+			t.Fatal("metadata refresh counted as a new visit")
+		}
+	}
+}
+
+func TestHistoryStopAlsoProtectsAgainstAnotherOpenInstance(t *testing.T) {
+	dir := t.TempDir()
+	p := &playerWindow{}
+	first := &browser{player: p, libraryPath: filepath.Join(dir, "library.json"), historySettingsPath: filepath.Join(dir, "history.json")}
+	second := &browser{libraryPath: first.libraryPath, historySettingsPath: first.historySettingsPath}
+	second.setHistoryRecording(false)
+	first.recordVideo(p, home+"watch/sm9", "履歴に残さない")
+	got, err := loadLibrary(first.libraryPath)
+	if err != nil || len(got.History) != 0 || !second.historyDisabled {
+		t.Fatalf("another instance kept recording after the preference changed: %+v (%v)", got.History, err)
 	}
 }
