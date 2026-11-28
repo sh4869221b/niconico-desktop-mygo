@@ -42,6 +42,8 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	selectedComment       int
+	focusCommentList      bool
 	quality               streamQuality
 	qualityRestore        *nativeQualityState
 	videoID               string

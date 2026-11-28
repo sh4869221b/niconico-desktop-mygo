@@ -69,6 +69,10 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 		n.ngNotice = "NG設定を保存できませんでした。"
 		return
 	}
+	selected := 0
+	if n.selectedComment >= 0 && n.selectedComment < len(n.commentRows) {
+		selected = n.commentRows[n.selectedComment]
+	}
 	n.applyCommentNG(b.commentNG.blocked)
 	if b.player != nil && b.player.native != nil && b.player.native != n {
 		b.player.native.applyCommentNG(b.commentNG.blocked)
@@ -80,6 +84,9 @@ func (b *browser) applyPendingCommentNG(n *nativePlayer) {
 		b.win.Invalidate()
 	}
 	if edit.block {
+		next := sort.SearchInts(n.commentRows, selected)
+		n.commentList.Choose(min(next, len(n.commentRows)-1))
+		n.focusCommentList = len(n.commentRows) != 0
 		n.ngNotice = "NGに登録しました。" + commentNGScope(edit.author)
 	} else {
 		n.ngNotice = "NGを解除しました。"
@@ -132,6 +139,7 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		ui.Text(c, n.commentNotice).TextColor(t.TextMuted).Wrap()
 	}
 	n.commentList.Key = func(i int) any { return n.commentRows[i] }
+	n.commentList.Selected = &n.selectedComment
 	follow := &n.follow
 	force := !follow.positioned || at < follow.lastAt || at-follow.lastAt > 250*time.Millisecond
 	follow.lastAt = at
@@ -148,10 +156,13 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 	ui.List(c, &n.commentList, len(n.commentRows), func(i int) {
 		row := n.allComments[n.commentRows[i]]
 		line := ui.Row(c).FillWidth().AlignItems(ui.Start).Padding(3, 4).Gap(6)
-		if row.VposMs == group {
-			line.Background(t.Selection)
-		} else if i%2 == 0 {
-			line.Background(t.Surface)
+		// The list paints the selection behind this row's content.
+		if i != n.selectedComment {
+			if row.VposMs == group {
+				line.Background(t.Selection)
+			} else if i%2 == 0 {
+				line.Background(t.Surface)
+			}
 		}
 		line.ContextMenu(func(m *ui.Menu) {
 			n.follow.manual = true
@@ -160,6 +171,7 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 				m.Separator()
 			}
 			if m.Item("このユーザーを NG").Disabled(row.author.ID == "" || b.commentNG.path == "").Chosen() {
+				n.commentList.Choose(i)
 				n.pendingNG = commentNGEdit{row.author, true}
 				c.Invalidate()
 			}
@@ -174,7 +186,7 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 			}
 			ui.Text(c, row.Body).Grow(1).MinWidth(0).Wrap()
 		})
-	}).Grow(1).MinHeight(0).FillWidth().Focusable().ObserveInput(func(ev ui.InputEvent) {
+	}).Grow(1).MinHeight(0).FillWidth().Focusable().Label("コメント一覧の行").ObserveInput(func(ev ui.InputEvent) {
 		switch ev.Kind {
 		case ui.InputPointerDown:
 			n.follow.manual = true
@@ -190,6 +202,9 @@ func (b *browser) drawNativeComments(c *ui.Context, n *nativePlayer, at time.Dur
 		}
 		return false
 	})
+	if n.focusCommentList && n.commentList.Focus(c) {
+		n.focusCommentList = false
+	}
 }
 
 func reachedCommentGroup(at time.Duration, comments []timedComment, rows []int) int64 {
