@@ -230,6 +230,7 @@ func (r screenRoute) startTime() time.Duration {
 type card struct {
 	link, title, summary, owner, ownerName, thumbnail string
 	tags                                              []string
+	details                                           videoDetails
 	external                                          bool
 	sortMetrics                                       map[string]string
 	masked                                            bool
@@ -242,6 +243,7 @@ type catalogPage struct {
 	description            []descriptionPart
 	tags                   []string
 	publisher              videoPublisher
+	details                videoDetails
 	emptyNotice            string
 	more                   bool
 	total                  *int
@@ -349,15 +351,7 @@ func decodeJSON[T any](b []byte) (T, error) {
 }
 
 func makeVideo(id, title string, duration, views, comments int) (card, bool) {
-	if !watchSegment.MatchString(id) {
-		return card{}, false
-	}
-	item := card{link: home + "watch/" + id, title: strings.TrimSpace(title)}
-	if item.title == "" {
-		item.title = id
-	}
-	item.summary = fmt.Sprintf("%d:%02d  ·  再生 %d  ·  コメント %d", duration/60, duration%60, views, comments)
-	return item, true
+	return makeOptionalVideo(id, title, &duration, &views, &comments)
 }
 
 func searchParameters(r screenRoute) url.Values {
@@ -420,6 +414,7 @@ func (c catalog) publicSearch(ctx context.Context, r screenRoute) (catalogPage, 
 	p.more = r.page < p.lastSearchPage() && (p.total != nil || p.rawCount == searchPageSize)
 	for _, item := range result.Data {
 		if v, ok := makeOptionalVideo(item.ContentID, item.Title, item.LengthSeconds, item.ViewCounter, item.CommentCounter); ok {
+			v.details.posted = videoPostedDate(item.StartTime)
 			v.thumbnail = normalizeThumbnailURL(item.ThumbnailURL)
 			v.sortMetrics = searchMetrics(item.StartTime, item.LastCommentTime, item.LikeCounter, item.MylistCounter)
 			v.tags = searchVideoTags(item.Tags)
@@ -460,6 +455,7 @@ func (v apiVideo) thumbnailURL() string {
 
 func (v apiVideo) card() (card, bool) {
 	x, ok := makeOptionalVideo(strings.ToLower(v.ID), v.Title, v.Duration, v.Count.View, v.Count.Comment)
+	x.details.posted = videoPostedDate(v.RegisteredAt)
 	x.thumbnail = v.thumbnailURL()
 	x.sortMetrics = searchMetrics(v.RegisteredAt, v.LastCommentTime, v.Count.Like, v.Count.Mylist)
 	x.masked = v.RequireSensitiveMasking
@@ -644,14 +640,18 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 	var result struct {
 		Status string `xml:"status,attr"`
 		Thumb  struct {
-			ID           string `xml:"video_id"`
-			Title        string `xml:"title"`
-			Description  string `xml:"description"`
-			UserID       string `xml:"user_id"`
-			UserNickname string `xml:"user_nickname"`
-			ChannelID    string `xml:"ch_id"`
-			ChannelName  string `xml:"ch_name"`
-			Tags         []struct {
+			ID            string `xml:"video_id"`
+			Title         string `xml:"title"`
+			Length        string `xml:"length"`
+			FirstRetrieve string `xml:"first_retrieve"`
+			ViewCounter   string `xml:"view_counter"`
+			CommentNum    string `xml:"comment_num"`
+			Description   string `xml:"description"`
+			UserID        string `xml:"user_id"`
+			UserNickname  string `xml:"user_nickname"`
+			ChannelID     string `xml:"ch_id"`
+			ChannelName   string `xml:"ch_name"`
+			Tags          []struct {
 				Domain string   `xml:"domain,attr"`
 				Items  []string `xml:"tag"`
 			} `xml:"tags"`
@@ -664,6 +664,7 @@ func (c catalog) video(ctx context.Context, r screenRoute) (catalogPage, error) 
 		return p, errors.New("指定した動画と異なる動画情報を受け取りました")
 	}
 	p.title = result.Thumb.Title
+	p.details = videoDetails{duration: videoLength(result.Thumb.Length), posted: videoPostedDate(result.Thumb.FirstRetrieve), views: videoCount(result.Thumb.ViewCounter), comments: videoCount(result.Thumb.CommentNum)}
 	for _, group := range result.Thumb.Tags {
 		if group.Domain == "jp" || group.Domain == "" {
 			for _, name := range group.Items {
@@ -702,17 +703,30 @@ func (c catalog) load(ctx context.Context, r screenRoute) (catalogPage, error) {
 }
 
 func makeOptionalVideo(id, title string, duration, views, comments *int) (card, bool) {
-	item, ok := makeVideo(id, title, 0, 0, 0)
+	if !watchSegment.MatchString(id) {
+		return card{}, false
+	}
+	item := card{link: home + "watch/" + id, title: strings.TrimSpace(title)}
+	if item.title == "" {
+		item.title = id
+	}
 	count := func(value *int) string {
 		if value == nil || *value < 0 {
-			return "—"
+			return ""
 		}
 		return strconv.Itoa(*value)
 	}
-	length := "—"
+	length := ""
 	if duration != nil && *duration >= 0 {
 		length = fmt.Sprintf("%d:%02d", *duration/60, *duration%60)
 	}
-	item.summary = length + "  ·  再生 " + count(views) + "  ·  コメント " + count(comments)
-	return item, ok
+	item.details = videoDetails{duration: length, views: count(views), comments: count(comments)}
+	shown := func(value string) string {
+		if value == "" {
+			return "—"
+		}
+		return value
+	}
+	item.summary = shown(length) + "  ·  再生 " + shown(item.details.views) + "  ·  コメント " + shown(item.details.comments)
+	return item, true
 }

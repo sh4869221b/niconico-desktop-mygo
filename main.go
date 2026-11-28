@@ -52,6 +52,7 @@ type browser struct {
 	index                        int
 	userNames                    map[string]string
 	result                       catalogPage
+	knownVideoDetails            map[string]videoDetails
 	resultErr                    error
 	busy                         bool
 	cancel                       context.CancelFunc
