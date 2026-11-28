@@ -597,11 +597,6 @@ func (p *playerWindow) load(target string) {
 
 func (p *playerWindow) draw(c *ui.Context, recover func(playbackMode)) {
 	ui.Column(c).Fill().Background(c.Theme().Surface).Children(func() {
-		var page playbackPage
-		if p.view != nil {
-			page = p.view.Page()
-		}
-		p.drawSharing(c, page)
 		if p.view != nil && !p.replaceFailedWebView {
 			ui.WebView(c, p.view).Grow(1).FillWidth().MinHeight(0)
 		}
@@ -618,6 +613,11 @@ func (p *playerWindow) draw(c *ui.Context, recover func(playbackMode)) {
 				}
 			})
 		}
+		var page playbackPage
+		if p.view != nil {
+			page = p.view.Page()
+		}
+		p.drawSharing(c, page)
 		if p.commentLanguageWarning {
 			ui.Text(c, commentLanguageWarning).TextColor(c.Theme().TextMuted).Padding(5, 12).Wrap()
 		}
