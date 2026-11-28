@@ -42,6 +42,8 @@ type nativePlayer struct {
 	follow                commentFollow
 	tags                  []string
 	tagNotice             string
+	quality               streamQuality
+	qualityRestore        *nativeQualityState
 	videoID               string
 	handoffKnown          bool
 	retryAt               time.Duration
@@ -78,13 +80,17 @@ func (p *playerWindow) stopNative() {
 }
 
 func (b *browser) loadNativePlayer(p *playerWindow, route screenRoute) {
-	b.loadNativePlayerAt(p, route, route.startTime(), false)
+	b.loadNativePlayerQuality(p, route, qualityAuto, nil)
 }
 
-func (b *browser) loadNativePlayerAt(p *playerWindow, route screenRoute, at time.Duration, paused bool) {
+func (b *browser) loadNativePlayerQuality(p *playerWindow, route screenRoute, quality streamQuality, restore *nativeQualityState) {
 	p.stopNative()
 	ctx, cancel := context.WithCancel(context.Background())
-	n := newNativeAttempt(route, at, paused, cancel)
+	n := newNativeAttempt(route, route.startTime(), false, cancel)
+	n.quality, n.qualityRestore = quality, restore
+	if restore != nil {
+		restore.apply(n)
+	}
 	p.native, p.target = n, route.target
 	p.win.SetTitle(appName + " ・ 独自プレーヤー")
 	p.win.Invalidate()
@@ -95,7 +101,7 @@ func (b *browser) loadNativePlayerAt(p *playerWindow, route screenRoute, at time
 	active := func() bool { return !b.closed && b.player == p && p.native == n }
 	go func() {
 		req, cancelReq := context.WithTimeout(ctx, 25*time.Second)
-		source, err := nativeStream(req, route.key, session)
+		source, err := nativeStreamQuality(req, route.key, session, quality)
 		cancelReq()
 		local := ""
 		var relay *hlsRelay
@@ -117,6 +123,10 @@ func (b *browser) loadNativePlayerAt(p *playerWindow, route screenRoute, at time
 				n.failStream("Windows の動画再生機能で配信を開けませんでした。")
 			} else {
 				b.applyNativeAudio(n.stream)
+				if restore != nil {
+					n.stream.SetVolume(restore.volume)
+					n.stream.SetMuted(restore.muted)
+				}
 				if n.stream.PrepareStart(n.startAt) {
 					n.startAt = 0
 				}
@@ -252,6 +262,7 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 		ui.Scroll(c.Key("player-toolbar")).FillWidth().MaxHeight(h * 0.15).Shrink(0).Children(func() {
 			ui.Row(c).FillWidth().Padding(8, 12).Gap(8).Wrap().AlignItems(ui.Center).Children(func() {
 				ui.Text(c, "独自プレーヤー（試験版）").Bold()
+				b.drawNativeQuality(c, p, n)
 				fullscreen := "全画面"
 				if p.win != nil && p.win.IsFullScreen() {
 					fullscreen = "全画面を解除"
@@ -322,7 +333,8 @@ func (b *browser) drawPlayer(p *playerWindow, c *ui.Context) {
 				if !n.loadingStream && ui.Button(c, "独自プレーヤーで再試行").Clicked() {
 					go mygo.RunOnMain(func() {
 						if !b.closed && b.player == p && p.native == n {
-							b.loadNativePlayerAt(p, routeFor(p.target), n.retryAt, n.retryPaused)
+							route := routeFor(p.target)
+							b.loadNativePlayerQuality(p, route, n.quality, b.captureNativeQuality(n, route))
 						}
 					})
 				}
