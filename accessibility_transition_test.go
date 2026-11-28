@@ -72,3 +72,47 @@ func TestNativeControlsReturnAfterOfficialModeIsDismissed(t *testing.T) {
 	}
 	t.Fatal("native play control was not keyboard reachable after return")
 }
+
+func TestPlaybackWindowFocusReturnKeepsTabAndF6InNativeRegions(t *testing.T) {
+	const search, tag = "キーワード、タグ、動画IDまたはURL", "タグ検索 音楽"
+	start := routeFor(home + "watch/sm1097445")
+	b := &browser{
+		navigation: []screenRoute{start}, closed: true, closeHelpAcknowledged: true,
+		result: catalogPage{title: "動画詳細", tags: []string{"音楽"}},
+	}
+	v := ui.NewTester(b.draw, 1260, 850)
+	v.UseScreenReader()
+	assertFocus := func(name string) {
+		t.Helper()
+		access, ok := v.Access(name)
+		if !v.Focused(name) || !ok || !access.Focused {
+			t.Fatalf("keyboard and accessible focus did not agree on %q: %+v", name, access)
+		}
+		if name != search {
+			if field, _ := v.Access(search); field.Focused {
+				t.Fatal("search box retained accessibility focus after focus left it")
+			}
+		}
+	}
+	v.Key(ui.Ctrl, ui.KeyL)
+	assertFocus(search)
+	v.Key(0, ui.KeyF6)
+	assertFocus("動画詳細")
+	for range 20 {
+		if v.Focused("再生") {
+			break
+		}
+		v.Key(0, ui.KeyTab)
+	}
+	assertFocus("再生")
+	// The native app window loses focus while the official player is open.
+	v.SetFocused(false)
+	v.SetFocused(true)
+	assertFocus("再生")
+	v.Key(0, ui.KeyTab)
+	assertFocus(tag)
+	v.Key(0, ui.KeyEnter)
+	if route := b.navigation[b.index]; route.kind != screenSearch || route.key != "音楽" {
+		t.Fatalf("the focused tag did not open its search: %+v", route)
+	}
+}

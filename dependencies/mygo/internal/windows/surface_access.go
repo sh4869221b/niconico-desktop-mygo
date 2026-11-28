@@ -504,6 +504,10 @@ var listening = func() bool {
 	return r != 0
 }
 
+var notifyWindowFocus = func(hwnd uintptr) {
+	procNotifyWinEvent.Call(eventObjectFocus, hwnd, uintptr(objidClient&0xffffffff), 0)
+}
+
 func (t *uiaTree) update(tree *platform.AccessTree) {
 	// Announcements go into a polite live region at the end of the tree,
 	// whose LiveRegionChanged screen readers read, as Flutter's alerts:
@@ -621,11 +625,14 @@ func (t *uiaTree) update(tree *platform.AccessTree) {
 	t.spareNodes = old
 	if tree.Focus != t.focus {
 		t.focus = tree.Focus
-		if e := t.nodes[t.focus]; e != nil && notify {
-			procUiaRaiseAutomationEvent.Call(e.ptr(ifaceSimple), uiaFocusChangedEvent)
-			// Clients that follow the focus through WinEvents, as those of
-			// System.Windows.Automation, then ask the window for it.
-			procNotifyWinEvent.Call(eventObjectFocus, t.s.hwnd, uintptr(objidClient&0xffffffff), 0)
+		if e := t.nodes[t.focus]; e != nil && !t.quiet {
+			if notify {
+				procUiaRaiseAutomationEvent.Call(e.ptr(ifaceSimple), uiaFocusChangedEvent)
+			}
+			// Native controls share an HWND. A client that queries focus
+			// without subscribing to UIA events still needs the WinEvent
+			// when keyboard focus moves between its virtual children.
+			notifyWindowFocus(t.s.hwnd)
 		}
 	}
 	if e := t.nodes[announcerID]; e != nil && notify && len(tree.Announcements) > 0 {

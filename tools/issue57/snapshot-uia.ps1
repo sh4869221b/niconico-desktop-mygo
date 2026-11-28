@@ -45,9 +45,20 @@ foreach ($root in $roots) {
     $rows.Add([pscustomobject]@{window=$root.Current.Name; snapshot_nodes=$count; truncated=($queue.Count -gt 0)})
 }
 $globalFocusPid = $null
-try { $globalFocusPid = [System.Windows.Automation.AutomationElement]::FocusedElement.Current.ProcessId } catch {}
+$globalFocus = $null
+try {
+    $currentFocus = [System.Windows.Automation.AutomationElement]::FocusedElement.Current
+    $globalFocusPid = $currentFocus.ProcessId
+    if ($globalFocusPid -eq $ProcessId) {
+        $globalFocus = @{
+            name=$currentFocus.Name; role=$currentFocus.ControlType.ProgrammaticName;
+            automation_id=$currentFocus.AutomationId; focused=$currentFocus.HasKeyboardFocus
+        }
+    }
+} catch {}
 [pscustomobject]@{
     label=$Label; utc=[DateTimeOffset]::UtcNow.ToString('o'); process_id=$ProcessId;
     process_name=$target.ProcessName; global_focus_process_id=$globalFocusPid;
+    global_focus=$globalFocus;
     window_count=$roots.Count; nodes=$rows
 } | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 $Output

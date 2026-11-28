@@ -1,13 +1,15 @@
 # #57: 別窓・公式 WebView からのフォーカスと読み上げ
 
-状態: **一部確認、読み上げは未検証**。初回 NucBox v0.3.0 / main `45edceb24d62b7822e050ca19ff6689f0ca44224` では公式 WebView→独自 UI に戻れたが、画面のフォーカス枠と UIA の差が報告された。タグ遷移と Narrator / NVDA の実際の発話は未実施。
+状態: **NucBox で UIA フォーカスの不一致を再現。修正候補の再試験と読み上げは未実施**。
+Windows x64 artifact `15267190837`、main `5d178f00d545b2ae57c5a1c955f631d8e3cab3ec`（[Windows CI](https://github.com/sh4869221b/niconico-desktop-mygo/actions/runs/46153497683)）を専用プロファイルで起動した。公開動画 `sm1097445` の詳細から公式 WebView 別窓を開き、Alt+F4 で閉じてメインで Tab を一度押すと「音楽」タグに枠が付き、Enter でタグ検索へ遷移した。UIA が返した focused 要素は検索欄のままだった。Alt+Left での戻りと F6 の領域移動でも、描画と UIA の差が見られた。
 
-不一致の対象要素・時刻がまだ揃っていないため、推測でフォーカス復帰は変更しない。
-自動テストは native tree に正しい名前・role・focused が出ること、タグのキーボード起動後に検索結果を Tab で操作できること、公式モード解除後に native 再生ボタンへ移れることを確認する。WebView 自体・OS の UIA イベント・音声出力は含まない。
+Windows の UIA プロバイダーは仮想要素間でフォーカスが動いたとき、UIA イベントの購読がなくても Windows のフォーカス通知を送る。これまでフォーカス移動の通知は購読状態に従っていた。アプリのフォーカス移動先は変えない。
+自動テストは、ウィンドウのフォーカス復帰、Tab・F6 が選んだ要素と native accessibility tree の一致、および購読がない場合の Windows プロバイダーの通知経路を検証する。実際の Windows UIA クライアント、別窓の WebView2、Narrator / NVDA の発話は以下で確認する。
 
 ```powershell
 git rev-parse HEAD
-go test -mod=readonly -run 'Test(TagTransitionKeepsNativeResultKeyboardAccessible|NativeControlsReturnAfterOfficialModeIsDismissed)$' -count=1 -v .
+go test -mod=readonly -run 'Test(TagTransitionKeepsNativeResultKeyboardAccessible|NativeControlsReturnAfterOfficialModeIsDismissed|PlaybackWindowFocusReturnKeepsTabAndF6InNativeRegions)$' -count=1 -v .
+go test -mod=readonly -run '^TestUIAFocusPublishesWinEventWithoutUIAEventSubscription$' -count=1 -v github.com/egoist/mygo/internal/windows
 go build -mod=readonly -o NiconicoDesktopMyGo-a11y.exe .
 ```
 
@@ -20,6 +22,7 @@ go build -mod=readonly -o NiconicoDesktopMyGo-a11y.exe .
 2. 独自プレーヤー別窓→タグ→メインの検索結果。再生継続と、前面窓・フォーカス枠・UIA の一致を確認。
 3. メインの公式ページ→「独自UIに戻る」。マウスとキーボードを分け、復帰直後・最初の Tab 後の窓名/要素/発話を記録。
 4. 公式 WebView の動画→タグ検索がメインに開く場合も、別窓内の復帰とメインへの移動を別に記録する。
+5. 再現に使った動画で公式別窓を Alt+F4 で閉じ、メインで Tab を1回。画面の枠、`global_focus`、同じ窓の `nodes[].focused` を記録してから Enter でタグ検索を確認する。Alt+Left と F6 もそれぞれ試す。Narrator / NVDA を起動する前の UIA スナップショットと、発話を記録する試行は別に残す。
 
 ## 読み取り専用 UIA スナップショット
 
@@ -46,7 +49,7 @@ Wait-Job $job | Receive-Job
 Remove-Job $job
 ```
 
-`global_focus_process_id`、各窓の UIA `focused` / `focusable` / `bounds` と録画を対応付ける。WebView2 の子要素は別プロセスになる場合があるため、PID だけで一致/不一致を断定しない。truncated=true、要素消失、provider エラーは記録不足とする。
+`global_focus`（対象プロセス内の名前と role）、`global_focus_process_id`、各窓の UIA `focused` / `focusable` / `bounds` と録画を対応付ける。WebView2 の子要素は別プロセスになる場合があるため、PID だけで一致/不一致を断定しない。truncated=true、要素消失、provider エラーは記録不足とする。
 UIA snapshot は 1 時点の tree であり、読み上げの発話やイベント順を保証しない。スクリプトは UI 操作・設定変更を行わない。
 
 | SHA / 読み上げ/版 | 遷移/操作 | 復帰直後の窓と画面枠 | UIA focused の名前/role | 最初の発話 / 重複 | 最初の Tab 後 | 判定 |
